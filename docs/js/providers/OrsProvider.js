@@ -91,6 +91,7 @@ export class OrsProvider extends RouteProvider {
     baseUrl = DEFAULT_BASE_URL,
     requestsPerMinute = REQUESTS_PER_MINUTE,
     nowImpl = null,
+    onRequest = null,
   } = {}) {
     super();
     this.apiKey = apiKey;
@@ -105,6 +106,9 @@ export class OrsProvider extends RouteProvider {
     this._fetch = fetchImpl || ((...args) => globalThis.fetch(...args));
     this._sleep = sleepImpl || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this._now = nowImpl || (() => Date.now());
+    // Called once per HTTP request issued, so the app can keep a quota tally
+    // without this file knowing that storage exists.
+    this._onRequest = typeof onRequest === 'function' ? onRequest : null;
 
     // Admission control is serialised through this chain so concurrent callers
     // cannot both see a free slot and take it. The fetch itself runs outside
@@ -227,6 +231,7 @@ export class OrsProvider extends RouteProvider {
    */
   async _post(path, body, signal) {
     await this._acquireSlot();
+    if (this._onRequest) this._onRequest(1);
 
     const run = async () => {
       let response;
@@ -303,10 +308,11 @@ export class OrsProvider extends RouteProvider {
     if (reachable) {
       return new RouteProviderError(
         PROVIDER_ERRORS.INVALID_KEY,
-        'OpenRouteService rejected the request, which almost always means the ' +
-          'API key is wrong, not yet active, or out of quota. The service does ' +
-          'not send CORS headers on a rejection, so the browser cannot show the ' +
-          'real reason. Clear the key and enter it again.',
+        'OpenRouteService refused the request. If this was working earlier ' +
+          'today, the daily quota is the likely cause and it resets on its own ' +
+          '- check the usage panel on your OpenRouteService dashboard. ' +
+          'Otherwise the key may be wrong or not yet active. Regenerating the ' +
+          'key does not help; that is only for a key that has leaked.',
         { cause, retryable: false },
       );
     }

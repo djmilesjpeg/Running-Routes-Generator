@@ -379,3 +379,7 @@ input[type="number"], input[type="password"], input[type="text"] {
 @media (min-width: 760px) {
   .style-grid { grid-template-columns: repeat(3, 1fr); }
 }
+
+/* A usage tally close to the daily allowance needs to be noticeable, since
+   exceeding it produces an error the browser cannot explain. */
+.note.warn { color: var(--danger); font-weight: 600; }

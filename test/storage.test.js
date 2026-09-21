@@ -311,3 +311,97 @@ test('cache: a browser blocking storage degrades quietly', async () => {
     assert.doesNotThrow(() => c.clearRoutes());
   });
 });
+
+// ---------------------------------------------------------------------------
+// daily API usage tally
+// ---------------------------------------------------------------------------
+
+const usage = () => import('../docs/js/app/usage.js');
+
+test('usage: counts requests for the day', async () => {
+  await withStorage(fakeStorage(), async () => {
+    const u = await usage();
+    const day = new Date('2026-09-21T10:00:00Z');
+
+    assert.equal(u.todaysUsage(day).count, 0);
+
+    u.recordRequests(4, day);
+    u.recordRequests(12, day);
+
+    const today = u.todaysUsage(day);
+    assert.equal(today.count, 16, 'one full correction run');
+    assert.equal(today.remaining, u.FREE_TIER_DAILY - 16);
+    assert.equal(today.high, false);
+  });
+});
+
+test('usage: the tally resets on a new day', async () => {
+  await withStorage(fakeStorage(), async () => {
+    const u = await usage();
+
+    u.recordRequests(500, new Date('2026-09-21T23:00:00Z'));
+    assert.equal(u.todaysUsage(new Date('2026-09-21T23:30:00Z')).count, 500);
+
+    assert.equal(u.todaysUsage(new Date('2026-09-22T00:30:00Z')).count, 0, 'a new day starts clean');
+  });
+});
+
+test('usage: flags when the allowance is nearly gone', async () => {
+  // Exceeding it produces a 403 the browser cannot read, which looks exactly
+  // like a broken key. The warning is what makes that diagnosable.
+  await withStorage(fakeStorage(), async () => {
+    const u = await usage();
+    const day = new Date('2026-09-21T10:00:00Z');
+
+    u.recordRequests(Math.floor(u.FREE_TIER_DAILY * u.WARN_AT) + 1, day);
+
+    const today = u.todaysUsage(day);
+    assert.equal(today.high, true);
+    assert.ok(today.fraction >= u.WARN_AT);
+  });
+});
+
+test('usage: ignores nonsense increments', async () => {
+  await withStorage(fakeStorage(), async () => {
+    const u = await usage();
+    const day = new Date('2026-09-21T10:00:00Z');
+
+    u.recordRequests(0, day);
+    u.recordRequests(-5, day);
+    u.recordRequests(NaN, day);
+
+    assert.equal(u.todaysUsage(day).count, 0);
+  });
+});
+
+test('usage: stores no coordinates and no key', async () => {
+  const store = fakeStorage();
+  await withStorage(store, async () => {
+    const u = await usage();
+    u.recordRequests(10, new Date('2026-09-21T10:00:00Z'));
+
+    const raw = store.getItem('loopgen:usage');
+    assert.ok(!/-?\d{1,3}\.\d{4,}/.test(raw), 'a coordinate-shaped value was stored');
+    assert.match(raw, /^\{"day":"2026-09-21","count":10\}$/);
+  });
+});
+
+test('usage: clearing empties the tally', async () => {
+  await withStorage(fakeStorage(), async () => {
+    const u = await usage();
+    const day = new Date('2026-09-21T10:00:00Z');
+
+    u.recordRequests(42, day);
+    u.clearUsage();
+    assert.equal(u.todaysUsage(day).count, 0);
+  });
+});
+
+test('usage: degrades quietly when storage is blocked', async () => {
+  await withStorage(fakeStorage({ failOn: 'all' }), async () => {
+    const u = await usage();
+    assert.doesNotThrow(() => u.recordRequests(5));
+    assert.equal(u.todaysUsage().count, 0);
+    assert.doesNotThrow(() => u.clearUsage());
+  });
+});

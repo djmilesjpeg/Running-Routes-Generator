@@ -8,6 +8,7 @@
 
 import { generateRoutes } from './app/generate.js';
 import { saveRoute, loadRoutes, clearRoutes, cachedRouteCount } from './app/cache.js';
+import { recordRequests, todaysUsage } from './app/usage.js';
 import { OrsProvider } from './providers/OrsProvider.js';
 import {
   PROVIDER_ERRORS,
@@ -30,7 +31,7 @@ import { debug, error as logError } from './core/log.js';
 const PREFS_NAME = 'loopgen:prefs';
 
 /** Bumped when behaviour changes, so a stale cached module is obvious. */
-const BUILD = '2026-09-21-key-diagnosis';
+const BUILD = '2026-09-21-quota-visible';
 
 const el = (id) => document.getElementById(id);
 
@@ -505,7 +506,18 @@ async function generate({ reuseAbort = false } = {}) {
   }
 
   const targetM = state.distanceKm * 1000;
-  const provider = new OrsProvider({ apiKey: key, style: state.style });
+  const provider = new OrsProvider({
+    apiKey: key,
+    style: state.style,
+    // Keep a local tally. The free tier is 2000 requests a day and one
+    // generation can cost sixteen; when it runs out ORS answers 403 with no
+    // CORS header, which the browser cannot read - so without a visible count
+    // the failure looks like a broken key rather than an exhausted quota.
+    onRequest: (n) => {
+      recordRequests(n);
+      renderUsage();
+    },
+  });
 
   // A run can take a while against the real service. Let it be stopped rather
   // than leaving the only options as "wait" or "reload the page". When called
@@ -682,6 +694,19 @@ function hideKeyGate() {
   if (state.map) state.map.invalidate();
 }
 
+function renderUsage() {
+  const line = el('usage-status');
+  if (!line) return;
+
+  const usage = todaysUsage();
+  line.textContent =
+    usage.count === 0
+      ? 'No requests made from this browser today.'
+      : usage.count + ' of about ' + usage.limit + ' daily requests used from this browser today.';
+
+  line.classList.toggle('warn', usage.high);
+}
+
 function renderKeyStatus() {
   const masked = maskedRouteProviderKey();
   el('key-status').textContent = masked ? 'Stored in this browser: ' + masked : 'No key stored.';
@@ -729,7 +754,7 @@ function wireEvents() {
     const open = settings.hidden;
     settings.hidden = !open;
     el('settings-toggle').setAttribute('aria-expanded', String(open));
-    if (open) renderKeyStatus();
+    if (open) { renderKeyStatus(); renderUsage(); }
   });
 
   el('key-form').addEventListener('submit', (event) => {
@@ -799,6 +824,7 @@ function init() {
   wireEvents();
   markSettingsChanged();
   renderKeyStatus();
+  renderUsage();
   renderRecent();
 
   if (hasRouteProviderKey()) hideKeyGate();

@@ -490,3 +490,54 @@ test('an abort during a failed request is not mistaken for a key problem', async
     (error) => error.name === 'AbortError',
   );
 });
+
+test('OrsProvider: reports every request it issues, so quota can be tracked', async () => {
+  let counted = 0;
+  const { fetchImpl } = stubFetch(okRoute);
+
+  const provider = new OrsProvider({
+    apiKey: 'k', fetchImpl, sleepImpl: noSleep, onRequest: (n) => { counted += n; },
+  });
+
+  await provider.generateCandidates({ lat: LAT, lon: LON, distanceM: 5000, seed: 1 });
+  await provider.generateCandidates({ lat: LAT, lon: LON, distanceM: 5000, seed: 2 });
+
+  assert.equal(counted, 2, 'one per HTTP request');
+});
+
+test('OrsProvider: a weightings retry counts as a second request', async () => {
+  // It is a second call against the quota, so it has to be counted as one.
+  let counted = 0;
+  let call = 0;
+  const fetchImpl = async () => {
+    call += 1;
+    if (call === 1) return jsonResponse({ error: { message: 'unknown parameter' } }, 400);
+    return jsonResponse(makeOrsResponse({ requestedLengthM: 5000, seed: 1 }));
+  };
+
+  const provider = new OrsProvider({
+    apiKey: 'k', style: 'quiet', fetchImpl, sleepImpl: noSleep, onRequest: (n) => { counted += n; },
+  });
+
+  await provider.generateCandidates({ lat: LAT, lon: LON, distanceM: 5000, seed: 1 });
+  assert.equal(counted, 2);
+});
+
+test('OrsProvider: a rejected key blames quota first when it might be quota', async () => {
+  const fetchImpl = async (url, init = {}) => {
+    if (init.mode === 'no-cors') return { ok: false, status: 0, type: 'opaque' };
+    throw new TypeError('Failed to fetch');
+  };
+
+  const provider = new OrsProvider({ apiKey: 'k', fetchImpl, sleepImpl: noSleep });
+
+  await assert.rejects(
+    () => provider.generateCandidates({ lat: LAT, lon: LON, distanceM: 5000, seed: 1 }),
+    (error) => {
+      assert.match(error.message, /quota/i, 'quota should be named');
+      assert.match(error.message, /Regenerating the key does not help/i,
+        'regenerating is the wrong fix and the message should say so');
+      return true;
+    },
+  );
+});
