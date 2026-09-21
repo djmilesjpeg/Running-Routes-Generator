@@ -10,3 +10,4 @@
 
 test/fixtures/*.json
 test/*.test.js
+test/fixtures/*.js
