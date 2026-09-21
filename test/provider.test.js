@@ -187,7 +187,11 @@ test('OrsProvider: a rate limit is marked retryable and a bad key is not', async
   await check(401, false);
 });
 
-test('OrsProvider: a network failure is reported as such', async () => {
+test('OrsProvider: a blocked request names the likely causes, not just the connection', async () => {
+  // fetch rejects with a bare TypeError whichever of these it was, and the
+  // browser withholds the reason on purpose. Saying "check your connection"
+  // sends people to debug the one cause that is least likely on a machine
+  // that is plainly online.
   const provider = new OrsProvider({
     apiKey: 'k',
     sleepImpl: noSleep,
@@ -196,7 +200,14 @@ test('OrsProvider: a network failure is reported as such', async () => {
 
   await assert.rejects(
     () => provider.generateCandidates({ lat: LAT, lon: LON, distanceM: 5000, seed: 1 }),
-    (error) => error.code === PROVIDER_ERRORS.NETWORK && error.retryable === true,
+    (error) => {
+      assert.equal(error.code, PROVIDER_ERRORS.NETWORK);
+      assert.equal(error.retryable, true);
+      assert.match(error.message, /blocker/i, 'should name extensions as a cause');
+      assert.match(error.message, /VPN|firewall/i, 'should name network filtering');
+      assert.match(error.message, /offline/i, 'should still mention being offline');
+      return true;
+    },
   );
 });
 

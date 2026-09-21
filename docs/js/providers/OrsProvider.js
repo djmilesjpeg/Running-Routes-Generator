@@ -244,9 +244,18 @@ export class OrsProvider extends RouteProvider {
         });
       } catch (cause) {
         if (cause && cause.name === 'AbortError') throw cause;
+
+        // fetch rejects with a bare TypeError for several different causes and
+        // the browser deliberately withholds which, to avoid leaking
+        // cross-origin information. "Check your connection" was therefore
+        // misleading: a blocking extension and a response missing CORS headers
+        // look identical here, and both are more likely than an actual outage
+        // on a machine that is otherwise online.
         throw new RouteProviderError(
           PROVIDER_ERRORS.NETWORK,
-          'Could not reach the routing service. Check your connection.',
+          'The browser could not reach OpenRouteService. The request was blocked ' +
+            'before any reply came back, so the usual causes are an ad or privacy ' +
+            'blocker, a VPN or firewall, or being offline.',
           { cause, retryable: true },
         );
       }
