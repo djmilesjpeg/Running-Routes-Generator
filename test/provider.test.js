@@ -233,7 +233,10 @@ test('OrsProvider: an abort propagates rather than becoming a network error', as
   );
 });
 
-test('OrsProvider: requests are spaced to respect the rate limit', async () => {
+test('OrsProvider: a burst inside the rate limit is not delayed at all', async () => {
+  // A whole correction run is ~16 requests against a 40/minute allowance.
+  // Spacing those evenly would turn a couple of seconds into twenty for a
+  // limit that is never reached, so nothing should wait here.
   const waits = [];
   const { fetchImpl } = stubFetch(({ body }) =>
     jsonResponse(makeOrsResponse({ requestedLengthM: body.options.round_trip.length, seed: 1 })),
@@ -242,20 +245,50 @@ test('OrsProvider: requests are spaced to respect the rate limit', async () => {
   const provider = new OrsProvider({
     apiKey: 'k',
     fetchImpl,
-    minRequestIntervalMs: 1600,
     sleepImpl: (ms) => { waits.push(ms); return Promise.resolve(); },
   });
 
   await Promise.all(
-    [1, 2, 3].map((seed) => provider.generateCandidates({ lat: LAT, lon: LON, distanceM: 5000, seed })),
+    Array.from({ length: 16 }, (_, i) =>
+      provider.generateCandidates({ lat: LAT, lon: LON, distanceM: 5000, seed: i + 1 }),
+    ),
   );
 
-  const throttled = waits.filter((ms) => ms > 0);
-  assert.ok(throttled.length >= 2, 'concurrent requests were not spaced: ' + JSON.stringify(waits));
-  assert.ok(throttled.every((ms) => ms <= 1600), 'waited longer than the configured interval');
+  assert.deepEqual(waits, [], 'a burst within the allowance should never sleep');
 });
 
-test('OrsProvider: a failed request does not stall the queue behind it', async () => {
+test('OrsProvider: the window throttles once it is genuinely full', async () => {
+  const waits = [];
+  let now = 1_000_000;
+
+  const { fetchImpl } = stubFetch(({ body }) =>
+    jsonResponse(makeOrsResponse({ requestedLengthM: body.options.round_trip.length, seed: 1 })),
+  );
+
+  const provider = new OrsProvider({
+    apiKey: 'k',
+    fetchImpl,
+    requestsPerMinute: 3,
+    nowImpl: () => now,
+    sleepImpl: (ms) => { waits.push(ms); now += ms; return Promise.resolve(); },
+  });
+
+  for (let seed = 1; seed <= 3; seed += 1) {
+    await provider.generateCandidates({ lat: LAT, lon: LON, distanceM: 5000, seed });
+  }
+  assert.deepEqual(waits, [], 'the first three filled the window without waiting');
+
+  await provider.generateCandidates({ lat: LAT, lon: LON, distanceM: 5000, seed: 4 });
+
+  assert.equal(waits.length, 1, 'the fourth request should have waited');
+  assert.ok(waits[0] > 59_000 && waits[0] <= 61_000, 'waited ' + waits[0] + 'ms, expected about a minute');
+
+  // The window has now rolled over, so the next request goes straight through.
+  await provider.generateCandidates({ lat: LAT, lon: LON, distanceM: 5000, seed: 5 });
+  assert.equal(waits.length, 1, 'a request after the window rolled over should not wait');
+});
+
+test('OrsProvider: a failed request does not stall the admission gate behind it', async () => {
   let call = 0;
   const fetchImpl = async () => {
     call += 1;
@@ -268,7 +301,7 @@ test('OrsProvider: a failed request does not stall the queue behind it', async (
   await assert.rejects(() => provider.generateCandidates({ lat: LAT, lon: LON, distanceM: 5000, seed: 1 }));
 
   const [route] = await provider.generateCandidates({ lat: LAT, lon: LON, distanceM: 5000, seed: 2 });
-  assert.ok(route, 'the queue deadlocked after a rejection');
+  assert.ok(route, 'the admission gate deadlocked after a rejection');
 });
 
 test('OrsProvider: declares the attribution it requires', () => {

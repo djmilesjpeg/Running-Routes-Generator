@@ -23,12 +23,20 @@ import { RouteProvider, RouteProviderError, PROVIDER_ERRORS } from './RouteProvi
 const DEFAULT_BASE_URL = 'https://api.openrouteservice.org';
 
 /**
- * The free tier allows 40 directions requests per minute. A full correction
- * run is up to 16 requests, so the ceiling is reachable if someone generates
- * twice in quick succession. Spacing requests is friendlier than absorbing a
- * 429 and retrying.
+ * The free tier allows 40 directions requests per minute.
+ *
+ * A sliding window rather than a fixed gap between requests. The obvious
+ * implementation - sleep 60/40 seconds between calls - makes every generation
+ * feel broken: a correction run issues up to 16 requests, and spacing them
+ * evenly turns a two-second job into twenty seconds of spinner for a limit
+ * that was never going to be reached. This admits requests immediately until
+ * the window is genuinely full, and only then waits for the oldest to expire.
+ *
+ * The margin below 40 covers clock skew and any request the app makes outside
+ * a generation run.
  */
-const MIN_REQUEST_INTERVAL_MS = 1600;
+const REQUESTS_PER_MINUTE = 35;
+const RATE_WINDOW_MS = 60000;
 
 export class OrsProvider extends RouteProvider {
   static get id() {
@@ -43,6 +51,8 @@ export class OrsProvider extends RouteProvider {
    * @param {Function} [options.fetchImpl]           injectable for tests
    * @param {Function} [options.sleepImpl]           injectable for tests
    * @param {string} [options.baseUrl]
+   * @param {number} [options.requestsPerMinute]
+   * @param {Function} [options.nowImpl]              injectable for tests
    */
   constructor({
     apiKey,
@@ -51,22 +61,25 @@ export class OrsProvider extends RouteProvider {
     fetchImpl = null,
     sleepImpl = null,
     baseUrl = DEFAULT_BASE_URL,
-    minRequestIntervalMs = MIN_REQUEST_INTERVAL_MS,
+    requestsPerMinute = REQUESTS_PER_MINUTE,
+    nowImpl = null,
   } = {}) {
     super();
     this.apiKey = apiKey;
     this.profile = profile;
     this.roundTripPoints = roundTripPoints;
     this.baseUrl = baseUrl;
-    this.minRequestIntervalMs = minRequestIntervalMs;
+    this.requestsPerMinute = requestsPerMinute;
 
     this._fetch = fetchImpl || ((...args) => globalThis.fetch(...args));
     this._sleep = sleepImpl || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this._now = nowImpl || (() => Date.now());
 
-    // Serialises requests through a promise chain so concurrent callers still
-    // respect the interval.
-    this._queue = Promise.resolve();
-    this._lastRequestAt = 0;
+    // Admission control is serialised through this chain so concurrent callers
+    // cannot both see a free slot and take it. The fetch itself runs outside
+    // the chain, so requests still go out in parallel.
+    this._gate = Promise.resolve();
+    this._recent = [];
   }
 
   get displayName() {
@@ -140,11 +153,9 @@ export class OrsProvider extends RouteProvider {
    * @private
    */
   async _post(path, body, signal) {
-    const run = async () => {
-      const waitMs = this.minRequestIntervalMs - (Date.now() - this._lastRequestAt);
-      if (waitMs > 0) await this._sleep(waitMs);
-      this._lastRequestAt = Date.now();
+    await this._acquireSlot();
 
+    const run = async () => {
       let response;
       try {
         response = await this._fetch(this.baseUrl + path, {
@@ -180,14 +191,38 @@ export class OrsProvider extends RouteProvider {
       }
     };
 
-    // Chain onto the queue so parallel callers are spaced, and keep the chain
-    // alive when a request rejects.
-    const result = this._queue.then(run, run);
-    this._queue = result.then(
+    return run();
+  }
+
+  /**
+   * Take a slot in the rate window, waiting only if it is genuinely full.
+   * @private
+   */
+  async _acquireSlot() {
+    const admit = this._gate.then(async () => {
+      const prune = (at) => {
+        this._recent = this._recent.filter((t) => at - t < RATE_WINDOW_MS);
+      };
+
+      prune(this._now());
+
+      if (this._recent.length >= this.requestsPerMinute) {
+        // Wait for the oldest request to fall out of the window.
+        const waitMs = RATE_WINDOW_MS - (this._now() - this._recent[0]) + 50;
+        if (waitMs > 0) await this._sleep(waitMs);
+        prune(this._now());
+      }
+
+      this._recent.push(this._now());
+    });
+
+    // Keep the chain alive even if a waiter rejects.
+    this._gate = admit.then(
       () => undefined,
       () => undefined,
     );
-    return result;
+
+    return admit;
   }
 
   /**
