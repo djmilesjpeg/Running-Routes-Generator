@@ -19,7 +19,7 @@
  * Bump CACHE_VERSION to ship an update. The old cache is deleted on activate.
  */
 
-const CACHE_VERSION = 'v1';
+const CACHE_VERSION = 'v2';
 const CACHE_NAME = 'loopgen-shell-' + CACHE_VERSION;
 
 /** Everything needed to boot with no network. Paths are relative to scope. */
@@ -43,8 +43,8 @@ const APP_SHELL = [
   'js/ui/keystore.js',
   'icons/icon-192.png',
   'icons/icon-512.png',
-  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
-  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
+  'vendor/leaflet/leaflet.css',
+  'vendor/leaflet/leaflet.js',
 ];
 
 /** Hosts whose responses must never be stored. */
@@ -61,8 +61,8 @@ self.addEventListener('install', (event) => {
     (async () => {
       const cache = await caches.open(CACHE_NAME);
 
-      // Added individually: one unreachable CDN asset should not fail the
-      // whole install and leave the app with no offline support at all.
+      // Added individually so one missing entry cannot fail the whole install
+      // and leave the app with no offline support at all.
       await Promise.all(
         APP_SHELL.map((url) =>
           cache.add(new Request(url, { cache: 'reload' })).catch(() => {

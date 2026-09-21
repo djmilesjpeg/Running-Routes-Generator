@@ -4,7 +4,8 @@ Enter a distance and a run type. Get a loop route that starts and ends where you
 are standing, drawn on a map and downloadable as GPX for Strava, Runna or a
 watch.
 
-Static site. No build step, no bundler, no framework, no dependencies. Deploys
+Static site. No build step, no bundler, no framework, no npm dependencies, and
+no third-party CDN at runtime - Leaflet is vendored into `docs/vendor/`. Deploys
 to GitHub Pages as-is.
 
 ---
@@ -83,7 +84,7 @@ npm test
 ```
 
 There is nothing to build or install. `package.json` exists only to run the test
-suite and install the hook; there are no dependencies.
+suite and install the hook; there are no dependencies to install.
 
 ### Get an API key
 
@@ -191,6 +192,7 @@ docs/                        <- the only directory GitHub Pages serves
   sw.js
   css/app.css
   icons/
+  vendor/leaflet/            vendored, so the app depends on no external CDN
   js/
     core/                    pure; no network, no DOM, fully unit tested
       geo.js                 haversine, polyline length, elevation deltas

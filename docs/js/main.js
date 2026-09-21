@@ -619,6 +619,10 @@ function init() {
       : cachedRouteCount() + ' saved on this device.';
 
   registerServiceWorker();
+
+  // Tells the boot watchdog in index.html to stand down. If this is never
+  // reached, the page explains itself instead of appearing to load forever.
+  window.__loopgenReady = true;
 }
 
 // Same race as the service worker above: if module resolution outlasts

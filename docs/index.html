@@ -16,8 +16,10 @@
 
 <title>Loop — running route generator</title>
 
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<!-- Leaflet is vendored, not loaded from a CDN. This app has to work on a
+     phone with a poor connection, and a blocking third-party script is a
+     single point of failure that takes the whole page down silently. -->
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
 <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
@@ -165,6 +167,19 @@
 
 </main>
 
+<!-- Both #key-gate and #app start hidden, and main.js reveals one of them.
+     If main.js never executes, the page shows only this chrome and looks like
+     it is still loading, with nothing to explain why. The watchdog below
+     turns that silence into a message. -->
+<section id="boot-error" class="panel error-panel" hidden role="alert">
+  <strong>The app did not start</strong>
+  <p id="boot-error-detail">Something stopped the page loading.</p>
+  <p class="note">
+    Try a hard refresh (Ctrl+Shift+R). If it keeps happening, open the browser
+    console with F12 - any error there will say what failed.
+  </p>
+</section>
+
 <footer class="app-footer">
   <p>
     Map data &copy;
@@ -179,8 +194,38 @@
   </p>
 </footer>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="vendor/leaflet/leaflet.js"></script>
 <script type="module" src="js/main.js"></script>
+<script>
+// Deliberately not a module and not deferred: this must run even when the
+// module graph fails to load, which is exactly the case it reports on.
+(function () {
+  var TIMEOUT_MS = 6000;
+
+  window.addEventListener('error', function (event) {
+    if (event.target && (event.target.tagName === 'SCRIPT' || event.target.tagName === 'LINK')) {
+      showBootError('Failed to load ' + (event.target.src || event.target.href) + '.');
+    }
+  }, true);
+
+  setTimeout(function () {
+    if (window.__loopgenReady) return;
+    showBootError(
+      typeof window.L === 'undefined'
+        ? 'The map library did not load.'
+        : 'The app scripts loaded but did not finish starting.'
+    );
+  }, TIMEOUT_MS);
+
+  function showBootError(detail) {
+    var panel = document.getElementById('boot-error');
+    if (!panel || !panel.hidden) return;
+    var line = document.getElementById('boot-error-detail');
+    if (line) line.textContent = detail;
+    panel.hidden = false;
+  }
+})();
+</script>
+
 </body>
 </html>
