@@ -1,0 +1,350 @@
+/* ---------------------------------------------------------------------------
+   Loop - running route generator
+
+   Built for a phone held one-handed, outdoors, possibly mid-run. That drives
+   most of what follows: a very large primary button, tap targets at 44px or
+   more, and high contrast so the screen stays readable in sunlight.
+   --------------------------------------------------------------------------- */
+
+:root {
+  --bg: #f8f9fa;
+  --surface: #ffffff;
+  --border: #dee2e6;
+  --text: #212529;
+  --text-muted: #5c636a;
+
+  --accent: #0b7285;
+  --accent-text: #ffffff;
+  --route: #e8590c;
+  --go: #2b8a3e;
+  --danger: #c92a2a;
+
+  --radius: 12px;
+  --gap: 16px;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161a;
+    --surface: #1e2128;
+    --border: #343a40;
+    --text: #e9ecef;
+    --text-muted: #9aa3ad;
+
+    --accent: #3bc9db;
+    --accent-text: #08181c;
+    --route: #ff922b;
+    --go: #51cf66;
+    --danger: #ff6b6b;
+    --shadow: none;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 0 0 env(safe-area-inset-bottom);
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.5 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+
+h1, h2, h3 { line-height: 1.25; margin: 0 0 8px; }
+h1 { font-size: 1.35rem; letter-spacing: -0.02em; }
+h2 { font-size: 1.05rem; }
+h3 { font-size: 0.95rem; }
+p { margin: 0 0 12px; }
+a { color: var(--accent); }
+
+.note { color: var(--text-muted); font-size: 0.85rem; margin: 4px 0 0; }
+.error { color: var(--danger); font-size: 0.9rem; }
+
+/* --- chrome ------------------------------------------------------------- */
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+  padding: calc(12px + env(safe-area-inset-top)) var(--gap) 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 500; /* above Leaflet panes */
+}
+
+.app-footer {
+  padding: var(--gap);
+  margin-top: var(--gap);
+  border-top: 1px solid var(--border);
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+.app-footer p { margin: 0 0 6px; }
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  margin: var(--gap);
+  padding: var(--gap);
+}
+
+/* --- buttons ------------------------------------------------------------ */
+
+.button {
+  font: inherit;
+  font-weight: 600;
+  min-height: 44px;
+  padding: 10px 16px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.button:hover { border-color: var(--text-muted); }
+.button:active { transform: translateY(1px); }
+.button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+.button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.button.subtle { background: transparent; font-weight: 500; }
+.button.danger { color: var(--danger); border-color: var(--danger); }
+
+.icon-button {
+  font: inherit;
+  min-height: 44px;
+  padding: 8px 12px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+:where(button, input, a):focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* --- the primary action -------------------------------------------------
+   Deliberately oversized. This is the one control that matters, and it has
+   to be hittable without looking at the screen properly.
+   ----------------------------------------------------------------------- */
+
+.start-here {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+  min-height: 76px;
+  padding: 14px;
+  background: var(--go);
+  border: none;
+  border-radius: var(--radius);
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+}
+.start-here:active { filter: brightness(0.94); }
+.start-here[disabled] { opacity: 0.6; }
+.start-here-main { font-size: 1.2rem; font-weight: 700; }
+.start-here-sub { font-size: 0.82rem; opacity: 0.9; font-weight: 400; }
+
+/* --- form controls ------------------------------------------------------ */
+
+.field-group { margin-top: var(--gap); }
+.field { display: block; margin-bottom: 12px; }
+.field-label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+input[type="number"], input[type="password"], input[type="text"] {
+  font: inherit;
+  width: 100%;
+  min-height: 48px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.distance-input { display: flex; align-items: center; gap: 8px; }
+.distance-input input { font-size: 1.4rem; font-weight: 600; }
+.distance-input .unit { color: var(--text-muted); font-weight: 600; }
+
+.presets { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+  font: inherit;
+  min-height: 40px;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+.chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+
+.run-types { border: none; margin: var(--gap) 0 0; padding: 0; }
+.run-type-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+
+.run-type {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 62px;
+  padding: 10px;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.run-type[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+}
+.run-type-name { font-weight: 700; }
+.run-type-hint { font-size: 0.78rem; color: var(--text-muted); }
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.setting-row:last-of-type { border-bottom: none; }
+
+.key-gate { border-color: var(--accent); }
+
+/* --- progress and errors ------------------------------------------------ */
+
+.progress { display: flex; align-items: center; gap: var(--gap); }
+
+.spinner {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation-duration: 3s; }
+  .button:active { transform: none; }
+}
+
+.error-panel { border-color: var(--danger); }
+.error-panel strong { display: block; margin-bottom: 4px; color: var(--danger); }
+.error-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+
+/* --- map ---------------------------------------------------------------- */
+
+#map {
+  height: 52vh;
+  min-height: 300px;
+  margin: 0 var(--gap);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  z-index: 0; /* keep Leaflet panes under the sticky header */
+}
+.tile-warning { margin: 8px var(--gap) 0; }
+
+/* Leaflet's own surfaces need help in dark mode. */
+@media (prefers-color-scheme: dark) {
+  .leaflet-container { background: #1a1d23; }
+  .leaflet-control-attribution,
+  .leaflet-bar a {
+    background: rgba(30, 33, 40, 0.92) !important;
+    color: var(--text-muted) !important;
+  }
+  .leaflet-control-attribution a { color: var(--accent) !important; }
+  /* Tiles are light artwork; take the edge off without wrecking legibility. */
+  .leaflet-tile-pane { filter: brightness(0.78) contrast(1.05); }
+}
+
+/* --- results ------------------------------------------------------------ */
+
+.result-headline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.result-distance { font-size: 1.9rem; font-weight: 700; letter-spacing: -0.02em; }
+.result-error { font-size: 0.9rem; color: var(--text-muted); margin-left: 8px; }
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 12px;
+  margin: 0 0 var(--gap);
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.stats div { min-width: 0; }
+.stats dt {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+.stats dd { margin: 2px 0 0; font-size: 1.05rem; font-weight: 600; }
+
+.candidates-heading { margin-top: var(--gap); color: var(--text-muted); font-weight: 600; }
+.candidates { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+
+.candidate {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 52px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.candidate[aria-current="true"] { border-color: var(--accent); border-width: 2px; }
+.candidate-main { font-weight: 600; }
+.candidate-meta { font-size: 0.8rem; color: var(--text-muted); }
+.candidate-actions { display: flex; gap: 8px; flex: none; }
+
+/* --- wider screens ------------------------------------------------------ */
+
+@media (min-width: 760px) {
+  body { max-width: 900px; margin-inline: auto; }
+  .run-type-grid { grid-template-columns: repeat(4, 1fr); }
+  #map { height: 60vh; }
+}

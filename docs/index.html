@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Generate a running loop of a chosen distance from where you are standing, and export it as GPX.">
+<meta name="theme-color" content="#0b7285">
+<meta name="color-scheme" content="light dark">
+
+<!-- Installed to the home screen, this opens fullscreen with its own icon. -->
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Loop">
+
+<title>Loop — running route generator</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<header class="app-header">
+  <h1>Loop</h1>
+  <button type="button" id="settings-toggle" class="icon-button" aria-expanded="false" aria-controls="settings">
+    Settings
+  </button>
+</header>
+
+<!-- ------------------------------------------------------------------ -->
+<!-- API key. Shown on first load, and whenever the key has been cleared. -->
+<!-- ------------------------------------------------------------------ -->
+<section id="key-gate" class="panel key-gate" hidden>
+  <h2>One-time setup</h2>
+  <p>
+    This app routes with <a href="https://openrouteservice.org/dev/#/signup" target="_blank" rel="noopener">OpenRouteService</a>.
+    Sign up free, then paste your API key below.
+  </p>
+  <p class="note">
+    The key is stored only in this browser. It is never sent anywhere but OpenRouteService,
+    never written into a link, and you can remove it at any time from Settings.
+  </p>
+  <form id="key-form" autocomplete="off">
+    <label class="field">
+      <span class="field-label">OpenRouteService API key</span>
+      <input type="password" id="key-input" name="key" required
+             autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+             placeholder="Paste your key">
+    </label>
+    <p id="key-error" class="error" role="alert" hidden></p>
+    <button type="submit" class="button primary">Save key</button>
+  </form>
+</section>
+
+<!-- ------------------------------------------------------------------ -->
+<!-- Settings                                                            -->
+<!-- ------------------------------------------------------------------ -->
+<section id="settings" class="panel" hidden>
+  <h2>Settings</h2>
+
+  <div class="setting-row">
+    <div>
+      <strong>API key</strong>
+      <p class="note" id="key-status">No key stored.</p>
+    </div>
+    <button type="button" id="clear-key" class="button subtle danger">Clear key</button>
+  </div>
+
+  <div class="setting-row">
+    <div>
+      <strong>Saved routes</strong>
+      <p class="note" id="cache-status">No routes saved on this device.</p>
+    </div>
+    <button type="button" id="clear-cache" class="button subtle danger">Clear saved routes</button>
+  </div>
+
+  <p class="note">
+    Routes are saved on this device only, so you can open a recent one without a
+    signal. Nothing is uploaded anywhere.
+  </p>
+</section>
+
+<!-- ------------------------------------------------------------------ -->
+<!-- The primary action                                                  -->
+<!-- ------------------------------------------------------------------ -->
+<main id="app" hidden>
+
+  <section class="panel controls">
+    <button type="button" id="start-here" class="button start-here">
+      <span class="start-here-main">Start from here</span>
+      <span class="start-here-sub" id="start-here-sub">Uses your current location</span>
+    </button>
+
+    <div class="field-group">
+      <label class="field">
+        <span class="field-label">Distance</span>
+        <span class="distance-input">
+          <input type="number" id="distance" min="1" max="60" step="0.1" value="10" inputmode="decimal">
+          <span class="unit">km</span>
+        </span>
+      </label>
+
+      <div class="presets" role="group" aria-label="Distance presets">
+        <button type="button" class="chip" data-km="5">5</button>
+        <button type="button" class="chip" data-km="10">10</button>
+        <button type="button" class="chip" data-km="16">16</button>
+        <button type="button" class="chip" data-km="21.1">21.1</button>
+        <button type="button" class="chip" data-km="32">32</button>
+        <button type="button" class="chip" data-km="42.2">42.2</button>
+      </div>
+    </div>
+
+    <fieldset class="run-types">
+      <legend class="field-label">Run type</legend>
+      <div class="run-type-grid" id="run-types"></div>
+    </fieldset>
+  </section>
+
+  <!-- Progress ------------------------------------------------------ -->
+  <section id="progress" class="panel progress" hidden aria-live="polite">
+    <div class="spinner" aria-hidden="true"></div>
+    <div>
+      <strong id="progress-title">Finding routes</strong>
+      <p class="note" id="progress-detail">Asking for candidate loops…</p>
+    </div>
+  </section>
+
+  <!-- Errors -------------------------------------------------------- -->
+  <section id="error-panel" class="panel error-panel" hidden role="alert">
+    <strong id="error-title">Something went wrong</strong>
+    <p id="error-message"></p>
+    <div id="error-actions" class="error-actions"></div>
+  </section>
+
+  <!-- Map ----------------------------------------------------------- -->
+  <div id="map" role="application" aria-label="Route map"></div>
+  <p id="tile-warning" class="note tile-warning" hidden>
+    Map tiles cannot load while offline. The route itself is still correct and can be downloaded.
+  </p>
+
+  <!-- Results ------------------------------------------------------- -->
+  <section id="results" class="panel" hidden>
+    <div class="result-headline">
+      <div>
+        <span class="result-distance" id="result-distance">—</span>
+        <span class="result-error" id="result-error"></span>
+      </div>
+      <button type="button" id="download" class="button primary">Download GPX</button>
+    </div>
+
+    <dl class="stats" id="result-stats"></dl>
+
+    <h3 class="candidates-heading">Other candidates</h3>
+    <ul class="candidates" id="candidates"></ul>
+  </section>
+
+  <!-- Recent -------------------------------------------------------- -->
+  <section id="recent" class="panel" hidden>
+    <h2>Recent routes</h2>
+    <p class="note">Saved on this device, available without a signal.</p>
+    <ul class="candidates" id="recent-list"></ul>
+  </section>
+
+</main>
+
+<footer class="app-footer">
+  <p>
+    Map data &copy;
+    <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>
+    contributors, licensed under
+    <a href="https://opendatacommons.org/licenses/odbl/" target="_blank" rel="noopener">ODbL</a>.
+    Routing by
+    <a href="https://openrouteservice.org/" target="_blank" rel="noopener">OpenRouteService</a>.
+  </p>
+  <p class="note">
+    Your location stays in this browser. Routes are generated on demand and saved only on this device.
+  </p>
+</footer>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
