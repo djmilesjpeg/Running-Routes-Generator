@@ -95,6 +95,17 @@ suite and install the hook; there are no dependencies to install.
 The free tier allows 40 directions requests per minute and 2000 per day. One
 route generation costs up to 16 requests, so roughly 125 generations a day.
 
+**If the app says the key was rejected**, check the token on your
+OpenRouteService dashboard. A newly created token can take a few minutes to
+become active, and it is easy to copy the wrong value from the page.
+
+Worth knowing, because it is genuinely confusing: ORS answers a rejected key
+with a 403 that carries no `Access-Control-Allow-Origin` header. The browser
+therefore discards the response and hands JavaScript a bare `TypeError` with no
+status - a bad key is indistinguishable from a network failure at that point.
+The app probes the host with a `no-cors` request to tell the two apart, so it
+can say "your key was rejected" rather than "check your connection".
+
 ### Run it locally
 
 ```bash

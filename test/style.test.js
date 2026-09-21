@@ -5,6 +5,8 @@ import {
   ROUTE_STYLES,
   ROUTE_STYLE_IDS,
   isRouteStyle,
+  RouteProviderError,
+  PROVIDER_ERRORS,
 } from '../docs/js/providers/RouteProvider.js';
 import { OrsProvider } from '../docs/js/providers/OrsProvider.js';
 import { generateRoutes } from '../docs/js/app/generate.js';
@@ -412,4 +414,79 @@ test('a run that cannot make progress still terminates quickly', async () => {
   });
 
   assert.ok(Date.now() - started < 5000, 'took too long to give up');
+});
+
+// ---------------------------------------------------------------------------
+// telling a rejected key apart from a blocked request
+// ---------------------------------------------------------------------------
+
+test('a reachable host means the key was rejected, not the network', async () => {
+  // ORS omits Access-Control-Allow-Origin on its 403, so the browser discards
+  // the response and hands JavaScript a bare TypeError. That is what a bad key
+  // looks like from the page: not "forbidden", just "failed".
+  const seen = [];
+  const fetchImpl = async (url, init = {}) => {
+    seen.push({ url, mode: init.mode });
+    if (init.mode === 'no-cors') return { ok: false, status: 0, type: 'opaque' };
+    throw new TypeError('Failed to fetch');
+  };
+
+  const provider = new OrsProvider({ apiKey: 'k', fetchImpl, sleepImpl: noSleep });
+
+  await assert.rejects(
+    () => provider.generateCandidates({ lat: LAT, lon: LON, distanceM: 5000, seed: 1 }),
+    (error) => {
+      assert.equal(error.code, PROVIDER_ERRORS.INVALID_KEY, 'should blame the key, not the network');
+      assert.match(error.message, /key/i);
+      assert.equal(error.retryable, false, 'retrying with the same bad key is pointless');
+      return true;
+    },
+  );
+
+  assert.ok(seen.some((s) => s.mode === 'no-cors'), 'the reachability probe was never made');
+});
+
+test('an unreachable host is reported as a blocked request', async () => {
+  const fetchImpl = async () => { throw new TypeError('Failed to fetch'); };
+  const provider = new OrsProvider({ apiKey: 'k', fetchImpl, sleepImpl: noSleep });
+
+  await assert.rejects(
+    () => provider.generateCandidates({ lat: LAT, lon: LON, distanceM: 5000, seed: 1 }),
+    (error) => {
+      assert.equal(error.code, PROVIDER_ERRORS.NETWORK);
+      assert.match(error.message, /blocker|VPN|firewall|offline/i);
+      assert.equal(error.retryable, true);
+      return true;
+    },
+  );
+});
+
+test('a clean HTTP 403 is still reported directly, without probing', async () => {
+  // When CORS headers are present the status is readable and there is nothing
+  // to infer.
+  let probes = 0;
+  const fetchImpl = async (url, init = {}) => {
+    if (init.mode === 'no-cors') { probes += 1; return { ok: false, status: 0, type: 'opaque' }; }
+    return { ok: false, status: 403, json: async () => ({}) };
+  };
+
+  const provider = new OrsProvider({ apiKey: 'k', fetchImpl, sleepImpl: noSleep });
+
+  await assert.rejects(
+    () => provider.generateCandidates({ lat: LAT, lon: LON, distanceM: 5000, seed: 1 }),
+    (error) => error.code === PROVIDER_ERRORS.INVALID_KEY,
+  );
+  assert.equal(probes, 0, 'no probe is needed when the status can be read');
+});
+
+test('an abort during a failed request is not mistaken for a key problem', async () => {
+  const abortError = Object.assign(new Error('aborted'), { name: 'AbortError' });
+  const provider = new OrsProvider({
+    apiKey: 'k', sleepImpl: noSleep, fetchImpl: async () => { throw abortError; },
+  });
+
+  await assert.rejects(
+    () => provider.generateCandidates({ lat: LAT, lon: LON, distanceM: 5000, seed: 1 }),
+    (error) => error.name === 'AbortError',
+  );
 });

@@ -245,19 +245,21 @@ export class OrsProvider extends RouteProvider {
       } catch (cause) {
         if (cause && cause.name === 'AbortError') throw cause;
 
-        // fetch rejects with a bare TypeError for several different causes and
-        // the browser deliberately withholds which, to avoid leaking
-        // cross-origin information. "Check your connection" was therefore
-        // misleading: a blocking extension and a response missing CORS headers
-        // look identical here, and both are more likely than an actual outage
-        // on a machine that is otherwise online.
-        throw new RouteProviderError(
-          PROVIDER_ERRORS.NETWORK,
-          'The browser could not reach OpenRouteService. The request was blocked ' +
-            'before any reply came back, so the usual causes are an ad or privacy ' +
-            'blocker, a VPN or firewall, or being offline.',
-          { cause, retryable: true },
-        );
+        // A bare TypeError here has two very different causes with completely
+        // different fixes, and the browser will not say which.
+        //
+        //   1. The request never got out - an extension, VPN or firewall.
+        //   2. It got out and came back rejected, but ORS omits
+        //      Access-Control-Allow-Origin on its 403, so the browser discards
+        //      the response and reports it as a failure. That is what a bad
+        //      key looks like from JavaScript: not "forbidden", just "failed".
+        //
+        // The second is far more common and was previously reported as a
+        // connection problem, sending people to debug their network when the
+        // actual fix was to re-enter their key. A no-cors probe separates
+        // them: it completes opaquely whenever the host is genuinely
+        // reachable, and fails when something is blocking traffic.
+        throw await this._explainOpaqueFailure(cause);
       }
 
       if (!response.ok) throw await this._toError(response);
@@ -274,6 +276,48 @@ export class OrsProvider extends RouteProvider {
     };
 
     return run();
+  }
+
+  /**
+   * Work out what a bare fetch TypeError actually meant, and return a typed
+   * error that says something useful.
+   *
+   * The probe is a no-cors GET at the API root. no-cors cannot read the
+   * response, which is the point: it completes opaquely for any reply at all,
+   * so it succeeds exactly when the host is reachable and fails when traffic
+   * is being blocked. That is the distinction the original error could not
+   * make.
+   *
+   * @private
+   * @returns {Promise<RouteProviderError>}
+   */
+  async _explainOpaqueFailure(cause) {
+    let reachable = false;
+    try {
+      await this._fetch(this.baseUrl + '/', { method: 'GET', mode: 'no-cors' });
+      reachable = true;
+    } catch {
+      reachable = false;
+    }
+
+    if (reachable) {
+      return new RouteProviderError(
+        PROVIDER_ERRORS.INVALID_KEY,
+        'OpenRouteService rejected the request, which almost always means the ' +
+          'API key is wrong, not yet active, or out of quota. The service does ' +
+          'not send CORS headers on a rejection, so the browser cannot show the ' +
+          'real reason. Clear the key and enter it again.',
+        { cause, retryable: false },
+      );
+    }
+
+    return new RouteProviderError(
+      PROVIDER_ERRORS.NETWORK,
+      'The browser could not reach OpenRouteService at all - the request was ' +
+        'blocked before it left. The usual causes are an ad or privacy blocker, ' +
+        'a VPN or firewall, or being offline.',
+      { cause, retryable: true },
+    );
   }
 
   /**

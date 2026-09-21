@@ -30,7 +30,7 @@ import { debug, error as logError } from './core/log.js';
 const PREFS_NAME = 'loopgen:prefs';
 
 /** Bumped when behaviour changes, so a stale cached module is obvious. */
-const BUILD = '2026-09-21-network-msg';
+const BUILD = '2026-09-21-key-diagnosis';
 
 const el = (id) => document.getElementById(id);
 
