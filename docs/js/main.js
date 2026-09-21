@@ -29,6 +29,9 @@ import { debug, error as logError } from './core/log.js';
 
 const PREFS_NAME = 'loopgen:prefs';
 
+/** Bumped when behaviour changes, so a stale cached module is obvious. */
+const BUILD = '2026-09-21-stop-fix';
+
 const el = (id) => document.getElementById(id);
 
 const state = {
@@ -395,23 +398,53 @@ function renderRecent() {
  * The result is held in memory for the length of the session and never
  * written to storage. Nothing else needs it.
  */
-function getPosition() {
+function getPosition(signal = null) {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
       reject(new Error('This browser cannot provide your location.'));
       return;
     }
 
+    // getCurrentPosition has no cancel of its own, and on a laptop with no GPS
+    // it can sit for the full fifteen seconds. Without this, pressing stop
+    // during the wait did nothing: the fix arrived later and generation
+    // started anyway, which reads as a stop button that does not stop.
+    let settled = false;
+
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      reject(Object.assign(new Error('Stopped.'), { name: 'AbortError' }));
+    };
+
+    if (signal) {
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    const finish = (fn) => (value) => {
+      // A position that arrives after a stop is discarded, not acted on.
+      if (settled) return;
+      settled = true;
+      if (signal) signal.removeEventListener('abort', onAbort);
+      fn(value);
+    };
+
     navigator.geolocation.getCurrentPosition(
-      (position) => resolve({ lat: position.coords.latitude, lon: position.coords.longitude }),
-      (cause) => {
+      finish((position) =>
+        resolve({ lat: position.coords.latitude, lon: position.coords.longitude }),
+      ),
+      finish((cause) => {
         const messages = {
           1: 'Location permission was declined. Allow it in your browser settings to start from where you are.',
           2: 'Your location could not be determined. Try again somewhere with a clearer view of the sky.',
           3: 'Finding your location took too long. Try again.',
         };
         reject(new Error(messages[cause.code] || 'Your location could not be determined.'));
-      },
+      }),
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 },
     );
   });
@@ -421,24 +454,44 @@ async function startFromHere() {
   if (state.busy) return;
 
   clearError();
+
+  // Created here rather than in generate(), so stop works during the location
+  // wait as well as during routing. generate() then reuses this controller so
+  // one press cancels the whole operation.
+  state.abort = new AbortController();
   setBusy(true, { title: 'Finding you', detail: 'Waiting for a location fix…' });
 
   try {
-    state.position = await getPosition();
+    state.position = await getPosition(state.abort.signal);
     state.map.showStart(state.position.lat, state.position.lon);
     markSettingsChanged();
   } catch (cause) {
     setBusy(false);
+    state.abort = null;
+
+    if (cause && cause.name === 'AbortError') {
+      markSettingsChanged();
+      return;
+    }
+
     showError('Could not get your location', cause.message, [
-      { label: 'Try again', primary: true, onClick: startFromHere },
+      { label: 'Try again', primary: true, onClick: () => startFromHere() },
     ]);
     return;
   }
 
-  await generate();
+  // Stopped while the fix was arriving: do not start spending API quota.
+  if (state.abort.signal.aborted) {
+    setBusy(false);
+    state.abort = null;
+    markSettingsChanged();
+    return;
+  }
+
+  await generate({ reuseAbort: true });
 }
 
-async function generate() {
+async function generate({ reuseAbort = false } = {}) {
   const key = getRouteProviderKey();
   if (!key) {
     setBusy(false);
@@ -455,8 +508,10 @@ async function generate() {
   const provider = new OrsProvider({ apiKey: key, style: state.style });
 
   // A run can take a while against the real service. Let it be stopped rather
-  // than leaving the only options as "wait" or "reload the page".
-  state.abort = new AbortController();
+  // than leaving the only options as "wait" or "reload the page". When called
+  // from startFromHere the controller already exists and covers the location
+  // wait too, so one press of stop cancels the whole operation.
+  if (!reuseAbort || !state.abort) state.abort = new AbortController();
 
   setBusy(true, { title: 'Finding routes', detail: 'Asking for candidate loops…' });
   clearError();
@@ -540,7 +595,7 @@ async function generate() {
 
     logError(cause);
     showError('Route generation failed', cause.message || 'Something went wrong. Try again.', [
-      { label: 'Try again', primary: true, onClick: generate },
+      { label: 'Try again', primary: true, onClick: () => generate() },
     ]);
   }
 }
@@ -639,7 +694,7 @@ function renderKeyStatus() {
 
 function wireEvents() {
   el('start-here').addEventListener('click', startFromHere);
-  el('generate').addEventListener('click', generate);
+  el('generate').addEventListener('click', () => generate());
 
   el('cancel').addEventListener('click', () => {
     if (state.abort) state.abort.abort();
@@ -759,6 +814,10 @@ function init() {
   // Tells the boot watchdog in index.html to stand down. If this is never
   // reached, the page explains itself instead of appearing to load forever.
   window.__loopgenReady = true;
+
+  // Which build is actually executing. Browsers cache ES modules aggressively,
+  // and "is my fix even loaded?" is otherwise guesswork during debugging.
+  window.__loopgenBuild = BUILD;
 }
 
 // Same race as the service worker above: if module resolution outlasts
