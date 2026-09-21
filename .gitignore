@@ -30,3 +30,6 @@ coverage/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Local editor/tooling config, not part of the deployed site
+.claude/

@@ -64,6 +64,14 @@ PATTERNS
 
 BINARY_EXT='\.(png|jpe?g|gif|ico|webp|avif|woff2?|ttf|eot|zip|gz|tgz|pdf|mp[34]|mov|webm|wasm|bin)$'
 
+# The pattern lists above stay one-per-line because they have to be readable
+# and reviewable. They are joined into single alternations here: one grep per
+# pattern means roughly fifteen process spawns per file, which on Windows turns
+# a whole-tree scan into minutes. A hook slow enough to be annoying is a hook
+# that gets bypassed with --no-verify, which defeats the point of having it.
+KEY_RE="$(printf '%s' "$KEY_PATTERNS" | paste -sd '|' -)"
+COORD_RE="$(printf '%s' "$COORD_PATTERNS" | paste -sd '|' -)"
+
 # --- file list --------------------------------------------------------------
 
 if [ "$MODE" = "staged" ]; then
@@ -119,29 +127,19 @@ for f in "${FILES[@]}"; do
   printf '%s' "$content" | grep -Iq . || continue   # skip binary content
 
   # 2. credential formats - no file is exempt
-  while IFS= read -r pat; do
-    [ -z "$pat" ] && continue
-    hit="$(printf '%s' "$content" | grep -nE -e "$pat" | grep -Eiv "$PLACEHOLDER" | head -1)"
-    if [ -n "$hit" ]; then
-      line="${hit%%:*}"
-      report "$f" "Possible credential on line $line." \
-        "Keys belong in browser localStorage only. Never in source, config or a URL."
-      break
-    fi
-  done <<< "$KEY_PATTERNS"
+  hit="$(printf '%s' "$content" | grep -nE -e "$KEY_RE" | grep -Eiv "$PLACEHOLDER" | head -1)"
+  if [ -n "$hit" ]; then
+    report "$f" "Possible credential on line ${hit%%:*}." \
+      "Keys belong in browser localStorage only. Never in source, config or a URL."
+  fi
 
   # 3. coordinate shapes - fixtures may opt out via .coordcheckignore
   coord_exempt "$f" && continue
-  while IFS= read -r pat; do
-    [ -z "$pat" ] && continue
-    hit="$(printf '%s' "$content" | grep -nE -e "$pat" | head -1)"
-    if [ -n "$hit" ]; then
-      line="${hit%%:*}"
-      report "$f" "Coordinate-shaped value on line $line." \
-        "If these are invented fixture coordinates, add the path to .coordcheckignore."
-      break
-    fi
-  done <<< "$COORD_PATTERNS"
+  hit="$(printf '%s' "$content" | grep -nE -e "$COORD_RE" | head -1)"
+  if [ -n "$hit" ]; then
+    report "$f" "Coordinate-shaped value on line ${hit%%:*}." \
+      "If these are invented fixture coordinates, add the path to .coordcheckignore."
+  fi
 done
 
 # --- verdict ----------------------------------------------------------------
