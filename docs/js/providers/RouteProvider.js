@@ -41,8 +41,51 @@ export class RouteProviderError extends Error {
   }
 }
 
+/**
+ * Route styles, expressed in neutral terms.
+ *
+ * Providers translate these into their own profiles and weightings, so the UI
+ * and the orchestrator never name a provider-specific profile.
+ *
+ * WHAT THESE CANNOT PROMISE
+ * None of them guarantees a pavement. Footway and sidewalk tagging in
+ * OpenStreetMap is incomplete almost everywhere, so a road can be routable on
+ * foot simply because nobody has recorded whether it has a path beside it.
+ * `quiet` biases hard away from busy roads and is the right default, but the
+ * map is still worth a glance before setting off.
+ */
+export const ROUTE_STYLES = Object.freeze({
+  quiet: {
+    id: 'quiet',
+    label: 'Quiet',
+    hint: 'Avoids busy roads',
+    description: 'Prefers residential streets and footpaths over main roads.',
+  },
+  paths: {
+    id: 'paths',
+    label: 'Paths',
+    hint: 'Parks and trails',
+    description: 'Prefers parks, trails and green space. Surfaces may be uneven.',
+  },
+  direct: {
+    id: 'direct',
+    label: 'Direct',
+    hint: 'Shortest sensible',
+    description: 'No preference applied. Can use main roads.',
+  },
+});
+
+/** Route style ids in display order. The default is first. */
+export const ROUTE_STYLE_IDS = Object.freeze(['quiet', 'paths', 'direct']);
+
+/** @returns {boolean} */
+export function isRouteStyle(id) {
+  return Object.prototype.hasOwnProperty.call(ROUTE_STYLES, id);
+}
+
 /** Stable error codes. The UI maps these to advice. */
 export const PROVIDER_ERRORS = Object.freeze({
+  BAD_REQUEST: 'BAD_REQUEST',
   MISSING_KEY: 'MISSING_KEY',
   INVALID_KEY: 'INVALID_KEY',
   RATE_LIMITED: 'RATE_LIMITED',

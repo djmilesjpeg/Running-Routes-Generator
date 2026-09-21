@@ -18,7 +18,13 @@
  */
 
 import { routeFromOrsGeoJson } from '../core/route.js';
-import { RouteProvider, RouteProviderError, PROVIDER_ERRORS } from './RouteProvider.js';
+import {
+  RouteProvider,
+  RouteProviderError,
+  PROVIDER_ERRORS,
+  ROUTE_STYLES,
+  isRouteStyle,
+} from './RouteProvider.js';
 
 const DEFAULT_BASE_URL = 'https://api.openrouteservice.org';
 
@@ -38,6 +44,27 @@ const DEFAULT_BASE_URL = 'https://api.openrouteservice.org';
 const REQUESTS_PER_MINUTE = 35;
 const RATE_WINDOW_MS = 60000;
 
+/**
+ * How each neutral route style maps onto ORS.
+ *
+ * `quiet` and `green` are real ORS weightings (profile_params.weightings),
+ * both 0..1. Quietness steers away from busy roads, which is the closest
+ * available lever to "give me somewhere with a pavement" - ORS has no
+ * sidewalk filter, because OpenStreetMap sidewalk tagging is too incomplete
+ * to route on. avoid_features does not help here: for foot profiles it covers
+ * ferries, fords and steps, not roads.
+ *
+ * These weightings depend on extended graph storages that a given ORS
+ * deployment may not have built. If the request is rejected, the provider
+ * retries once without them rather than failing the run - see
+ * generateCandidates.
+ */
+const STYLE_TO_ORS = Object.freeze({
+  quiet: { profile: 'foot-walking', weightings: { quiet: 1.0, green: 0.4 } },
+  paths: { profile: 'foot-hiking', weightings: { green: 1.0, quiet: 0.6 } },
+  direct: { profile: 'foot-walking', weightings: null },
+});
+
 export class OrsProvider extends RouteProvider {
   static get id() {
     return 'ors';
@@ -56,7 +83,8 @@ export class OrsProvider extends RouteProvider {
    */
   constructor({
     apiKey,
-    profile = 'foot-walking',
+    profile = null,
+    style = 'quiet',
     roundTripPoints = 5,
     fetchImpl = null,
     sleepImpl = null,
@@ -66,7 +94,10 @@ export class OrsProvider extends RouteProvider {
   } = {}) {
     super();
     this.apiKey = apiKey;
-    this.profile = profile;
+    // An explicit profile overrides the style mapping, for callers that want
+    // a specific ORS profile. Otherwise the style decides.
+    this.profileOverride = profile;
+    this.style = isRouteStyle(style) ? style : 'quiet';
     this.roundTripPoints = roundTripPoints;
     this.baseUrl = baseUrl;
     this.requestsPerMinute = requestsPerMinute;
@@ -80,6 +111,7 @@ export class OrsProvider extends RouteProvider {
     // the chain, so requests still go out in parallel.
     this._gate = Promise.resolve();
     this._recent = [];
+    this._weightingsUnsupported = false;
   }
 
   get displayName() {
@@ -100,10 +132,11 @@ export class OrsProvider extends RouteProvider {
    * legitimately return several alternatives for a single seed; ORS returns
    * one, so this is usually an array of one.
    *
-   * @param {{lat:number, lon:number, distanceM:number, seed:number, signal?:AbortSignal}} request
+   * @param {{lat:number, lon:number, distanceM:number, seed:number,
+   *          style?:string, signal?:AbortSignal}} request
    * @returns {Promise<Array>} Route objects
    */
-  async generateCandidates({ lat, lon, distanceM, seed, signal = null }) {
+  async generateCandidates({ lat, lon, distanceM, seed, style = null, signal = null }) {
     if (!this.apiKey) {
       throw new RouteProviderError(
         PROVIDER_ERRORS.MISSING_KEY,
@@ -113,7 +146,11 @@ export class OrsProvider extends RouteProvider {
 
     RouteProvider.validateRequest({ lat, lon, distanceM, seed });
 
-    const body = {
+    const styleId = isRouteStyle(style) ? style : this.style;
+    const mapping = STYLE_TO_ORS[styleId];
+    const profile = this.profileOverride || mapping.profile;
+
+    const baseBody = {
       // ORS takes [lon, lat]. A round trip needs exactly one coordinate.
       coordinates: [[lon, lat]],
       elevation: true,
@@ -128,11 +165,34 @@ export class OrsProvider extends RouteProvider {
       },
     };
 
-    const geojson = await this._post(
-      '/v2/directions/' + encodeURIComponent(this.profile) + '/geojson',
-      body,
-      signal,
-    );
+    const weightedBody = mapping.weightings
+      ? {
+          ...baseBody,
+          options: {
+            ...baseBody.options,
+            profile_params: { weightings: { ...mapping.weightings } },
+          },
+        }
+      : baseBody;
+
+    const path = '/v2/directions/' + encodeURIComponent(profile) + '/geojson';
+
+    let geojson;
+    try {
+      geojson = await this._post(path, weightedBody, signal);
+    } catch (cause) {
+      // Quiet and green weightings need extended graph storages that a given
+      // ORS deployment may not have built, and it answers 400 when they are
+      // missing. Losing the preference is much better than losing the run, so
+      // retry once unweighted and let the caller know the style did not apply.
+      const rejectedWeightings =
+        mapping.weightings && cause instanceof RouteProviderError && cause.status === 400;
+
+      if (!rejectedWeightings) throw cause;
+
+      this._weightingsUnsupported = true;
+      geojson = await this._post(path, baseBody, signal);
+    }
 
     let route;
     try {
@@ -145,7 +205,20 @@ export class OrsProvider extends RouteProvider {
       );
     }
 
+    // Record which style was actually delivered, so the UI can be honest when
+    // a preference could not be applied.
+    route.styleId = styleId;
+    route.styleApplied = Boolean(mapping.weightings) && !this._weightingsUnsupported;
+
     return [route];
+  }
+
+  /**
+   * True once a request has been rejected for its weightings, meaning this
+   * deployment cannot honour the quiet and paths preferences.
+   */
+  get weightingsUnsupported() {
+    return this._weightingsUnsupported === true;
   }
 
   /**
@@ -275,6 +348,14 @@ export class OrsProvider extends RouteProvider {
         PROVIDER_ERRORS.NO_ROUTE,
         'No loop could be built from here at that distance.',
         { status: response.status },
+      );
+    }
+
+    if (response.status === 400) {
+      return new RouteProviderError(
+        PROVIDER_ERRORS.BAD_REQUEST,
+        orsMessage || 'The routing service rejected the request.',
+        { status: 400 },
       );
     }
 
