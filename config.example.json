@@ -1,0 +1,8 @@
+{
+  "_comment": "Example only. Never create a real config.json - it is gitignored and the app does not read it. The OpenRouteService key lives solely in your browser's localStorage, entered on first load.",
+  "orsApiKey": "REPLACE_ME_NEVER_COMMIT_A_REAL_KEY",
+  "defaultDistanceKm": 10,
+  "defaultRunType": "easy",
+  "candidateSeeds": 4,
+  "tolerancePct": 5
+}

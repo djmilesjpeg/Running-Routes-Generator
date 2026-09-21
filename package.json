@@ -1,0 +1,18 @@
+{
+  "name": "loop-route-generator",
+  "version": "1.0.0",
+  "description": "Round-trip running route generator with distance correction. Static site, no build step.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test test/",
+    "test:watch": "node --test --watch test/",
+    "install-hooks": "git config core.hooksPath .githooks && echo Hooks installed: .githooks",
+    "check": "bash .githooks/pre-commit --all",
+    "icons": "node scripts/make-icons.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

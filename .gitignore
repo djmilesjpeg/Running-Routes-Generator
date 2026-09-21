@@ -1,0 +1,32 @@
+# ---------------------------------------------------------------------------
+# PRIVACY: GitHub Pages serves every file in this repo, linked or not.
+# Anything matched here must never reach a commit. See README "Before you deploy".
+# ---------------------------------------------------------------------------
+
+# Route exports contain real coordinates
+*.gpx
+*.tcx
+*.fit
+
+# Real config / secrets. Only config.example.json is committed.
+config.json
+config.local.json
+.env
+.env.*
+!.env.example
+
+# Local route caches and scratch data
+route-cache.json
+*.routes.json
+cache/
+.scratch/
+
+# Tooling
+node_modules/
+coverage/
+*.log
+
+# OS cruft
+.DS_Store
+Thumbs.db
+desktop.ini
