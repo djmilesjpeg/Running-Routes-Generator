@@ -19,7 +19,7 @@
  * Bump CACHE_VERSION to ship an update. The old cache is deleted on activate.
  */
 
-const CACHE_VERSION = 'v2';
+const CACHE_VERSION = 'v3';
 const CACHE_NAME = 'loopgen-shell-' + CACHE_VERSION;
 
 /** Everything needed to boot with no network. Paths are relative to scope. */
@@ -27,6 +27,7 @@ const APP_SHELL = [
   './',
   'index.html',
   'manifest.webmanifest',
+  'version.json',
   'css/app.css',
   'js/main.js',
   'js/core/geo.js',
@@ -39,6 +40,7 @@ const APP_SHELL = [
   'js/providers/OrsProvider.js',
   'js/app/generate.js',
   'js/app/cache.js',
+  'js/app/usage.js',
   'js/ui/map.js',
   'js/ui/keystore.js',
   'icons/icon-192.png',
@@ -105,6 +107,9 @@ self.addEventListener('fetch', (event) => {
   // Location data and credentialled requests: hand straight to the network
   // and never look at, or write to, the cache.
   if (NEVER_CACHE_HOSTS.includes(url.hostname)) return;
+
+  // The staleness check is worthless if its own answer can be stale.
+  if (url.pathname.endsWith('/version.json')) return;
 
   // Navigations: prefer the network so an update is picked up promptly, and
   // fall back to the cached shell when there is no signal.

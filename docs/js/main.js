@@ -787,6 +787,57 @@ function wireEvents() {
   });
 }
 
+/**
+ * Notice when the page is running an older build than the server has.
+ *
+ * ES modules are cached independently by the browser, so a reload can pick up
+ * a new index.html and main.js while quietly keeping an old module underneath.
+ * The result is code that behaves like a version that no longer exists, which
+ * is close to impossible to diagnose from the inside - it cost several rounds
+ * of chasing a fix that was already applied.
+ *
+ * version.json is fetched with no-store, so it is always the server's current
+ * answer, and a mismatch is reported rather than left to be discovered.
+ */
+async function checkForStaleBuild() {
+  let serverBuild = null;
+  try {
+    const response = await fetch('version.json', { cache: 'no-store' });
+    if (!response.ok) return;
+    serverBuild = (await response.json()).build;
+  } catch {
+    return; // offline, or running from the cache; not worth reporting
+  }
+
+  if (!serverBuild || serverBuild === BUILD) return;
+
+  debug('stale build', { running: BUILD, available: serverBuild });
+  showError(
+    'This page is running an old version',
+    'The app on disk has been updated but this tab is still running build ' +
+      BUILD + '. Until it reloads you may see problems that are already fixed.',
+    [
+      {
+        label: 'Update now',
+        primary: true,
+        onClick: async () => {
+          // A plain reload is not enough: it can revalidate the page while
+          // still serving cached modules. Clear the worker and its caches,
+          // then force each module to be refetched before reloading.
+          try {
+            for (const registration of await navigator.serviceWorker.getRegistrations()) {
+              await registration.unregister();
+            }
+            for (const name of await caches.keys()) await caches.delete(name);
+          } catch { /* storage may be unavailable; the reload still helps */ }
+
+          location.reload();
+        },
+      },
+    ],
+  );
+}
+
 function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
 
@@ -836,6 +887,7 @@ function init() {
       : cachedRouteCount() + ' saved on this device.';
 
   registerServiceWorker();
+  checkForStaleBuild();
 
   // Tells the boot watchdog in index.html to stand down. If this is never
   // reached, the page explains itself instead of appearing to load forever.
