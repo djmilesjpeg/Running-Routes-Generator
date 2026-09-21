@@ -348,3 +348,34 @@ input[type="number"], input[type="password"], input[type="text"] {
   .run-type-grid { grid-template-columns: repeat(4, 1fr); }
   #map { height: 60vh; }
 }
+
+/* --- route style, explicit generate, richer progress -------------------- */
+
+/* Three styles rather than four run types, so their own track sizing. */
+.style-grid { grid-template-columns: repeat(3, 1fr); }
+
+.generate {
+  width: 100%;
+  margin-top: var(--gap);
+  min-height: 52px;
+  font-size: 1rem;
+}
+
+.progress { align-items: flex-start; }
+.progress-body { flex: 1; min-width: 0; }
+.progress-counts {
+  font-variant-numeric: tabular-nums; /* counts must not jitter as they change */
+  opacity: 0.85;
+}
+
+/* A candidate that missed the distance tolerance is still listed, but its
+   error is called out so it cannot be mistaken for a match. */
+.candidate-meta.off-target { color: var(--danger); }
+
+@media (max-width: 420px) {
+  .style-grid { grid-template-columns: 1fr; }
+}
+
+@media (min-width: 760px) {
+  .style-grid { grid-template-columns: repeat(3, 1fr); }
+}

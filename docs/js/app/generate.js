@@ -35,6 +35,7 @@ const FATAL_PROVIDER_ERRORS = new Set([
  * @param {number}   params.lon
  * @param {number}   params.targetM    desired loop length in metres
  * @param {string}   params.runType    easy | tempo | long | hills
+ * @param {string}   [params.style]    quiet | paths | direct
  * @param {number}   params.baseSeed   makes a run reproducible
  * @param {Object}   [params.options]  correction options
  * @param {Function} [params.onProgress] ({phase, round, requested, received})
@@ -53,6 +54,7 @@ export async function generateRoutes({
   targetM,
   runType,
   baseSeed,
+  style = null,
   options = {},
   onProgress = null,
   signal = null,
@@ -65,11 +67,34 @@ export async function generateRoutes({
   let plan = null;
   let round = 0;
 
+  const budget = opts.maxTotalAttempts ?? opts.candidateCount * opts.maxRounds;
+  const maxRounds = opts.maxRounds;
+
+  // A spinner alone looks the same whether one request is outstanding or
+  // sixteen, which is what makes a long run feel like a hang. Every callback
+  // carries enough for the UI to say where it has got to.
   const report = (phase, extra = {}) => {
-    if (onProgress) onProgress({ phase, round, attempts: attempts.length, ...extra });
+    if (!onProgress) return;
+    onProgress({
+      phase,
+      round,
+      maxRounds,
+      measured: attempts.length,
+      budget,
+      accepted: plan ? plan.accepted.length : 0,
+      ...extra,
+    });
   };
 
   while (requests.length > 0) {
+    // Check the signal here rather than relying on fetch to reject. A provider
+    // that ignores the signal - or a cached response that never hits the
+    // network - would otherwise let the loop start another round after the
+    // runner has already pressed stop.
+    if (signal && signal.aborted) {
+      throw Object.assign(new Error('Route generation was stopped.'), { name: 'AbortError' });
+    }
+
     round += 1;
     report('requesting', { requested: requests.length });
 
@@ -80,6 +105,7 @@ export async function generateRoutes({
           lon,
           distanceM: request.lengthM,
           seed: request.seed,
+          style,
           signal,
         }),
       ),
@@ -137,10 +163,7 @@ export async function generateRoutes({
 
     if (plan.status !== 'retry') break;
 
-    report('correcting', {
-      accepted: plan.accepted.length,
-      nextRequests: plan.nextRequests.length,
-    });
+    report('correcting', { nextRequests: plan.nextRequests.length });
     requests = plan.nextRequests;
   }
 
@@ -166,6 +189,13 @@ export async function generateRoutes({
 
   const ranked = scoreCandidates(plan.accepted, runType, { targetM });
 
+  // Loops that missed the tolerance are still worth showing. A single result
+  // beside an empty list reads as though nothing else was found, when in fact
+  // several were measured and simply landed outside 5%.
+  const others = (plan.allCandidates ?? []).filter(
+    (route) => !plan.accepted.some((a) => a.id === route.id),
+  );
+
   report('done', { accepted: plan.accepted.length });
 
   return {
@@ -173,6 +203,7 @@ export async function generateRoutes({
     ranked,
     best: ranked[0] ?? null,
     accepted: plan.accepted,
+    nearMisses: scoreSafely(others, runType, targetM),
     attempts,
     error: null,
     warnings,

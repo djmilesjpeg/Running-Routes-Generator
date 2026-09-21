@@ -9,7 +9,11 @@
 import { generateRoutes } from './app/generate.js';
 import { saveRoute, loadRoutes, clearRoutes, cachedRouteCount } from './app/cache.js';
 import { OrsProvider } from './providers/OrsProvider.js';
-import { PROVIDER_ERRORS } from './providers/RouteProvider.js';
+import {
+  PROVIDER_ERRORS,
+  ROUTE_STYLES,
+  ROUTE_STYLE_IDS,
+} from './providers/RouteProvider.js';
 import { RUN_TYPES, RUN_TYPE_IDS, scoreCandidates, routeStats } from './core/scoring.js';
 import { buildGpx, gpxFilename, defaultTrackName } from './core/gpx.js';
 import { relativeError } from './core/route.js';
@@ -30,11 +34,13 @@ const el = (id) => document.getElementById(id);
 const state = {
   map: null,
   runType: 'easy',
+  style: 'quiet',
   distanceKm: 10,
   position: null,      // {lat, lon} - held in memory only, never persisted
   ranked: [],
   selected: null,
   busy: false,
+  abort: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -47,6 +53,7 @@ function loadPrefs() {
     if (!raw) return;
     if (Number.isFinite(raw.distanceKm)) state.distanceKm = raw.distanceKm;
     if (RUN_TYPE_IDS.includes(raw.runType)) state.runType = raw.runType;
+    if (ROUTE_STYLE_IDS.includes(raw.style)) state.style = raw.style;
   } catch {
     /* first run, or storage unavailable */
   }
@@ -56,7 +63,11 @@ function savePrefs() {
   try {
     localStorage.setItem(
       PREFS_NAME,
-      JSON.stringify({ distanceKm: state.distanceKm, runType: state.runType }),
+      JSON.stringify({
+        distanceKm: state.distanceKm,
+        runType: state.runType,
+        style: state.style,
+      }),
     );
   } catch {
     /* not important enough to surface */
@@ -94,6 +105,71 @@ function renderRunTypes() {
   }
 }
 
+function renderRouteStyles() {
+  const container = el('route-styles');
+  container.innerHTML = '';
+
+  for (const id of ROUTE_STYLE_IDS) {
+    const spec = ROUTE_STYLES[id];
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'run-type';
+    button.setAttribute('aria-pressed', String(id === state.style));
+    button.dataset.style = id;
+    button.title = spec.description;
+
+    const name = document.createElement('span');
+    name.className = 'run-type-name';
+    name.textContent = spec.label;
+
+    const hint = document.createElement('span');
+    hint.className = 'run-type-hint';
+    hint.textContent = spec.hint;
+
+    button.append(name, hint);
+    button.addEventListener('click', () => selectStyle(id));
+    container.append(button);
+  }
+}
+
+/**
+ * Style changes the routing itself, so unlike run type it cannot be applied
+ * to candidates already in hand. It marks the results stale instead of
+ * silently re-requesting, leaving the decision to spend quota with the runner.
+ */
+function selectStyle(id) {
+  state.style = id;
+  savePrefs();
+
+  for (const button of document.querySelectorAll('.style-grid .run-type')) {
+    button.setAttribute('aria-pressed', String(button.dataset.style === id));
+  }
+
+  markSettingsChanged();
+}
+
+/**
+ * The generate button is the affordance for "I changed something, search
+ * again". It is disabled until a location is known, because there is nothing
+ * to search around before that.
+ */
+function markSettingsChanged() {
+  const button = el('generate');
+  const hint = el('generate-hint');
+  if (!button) return;
+
+  button.disabled = !state.position || state.busy;
+
+  if (!state.position) {
+    hint.textContent = 'Tap "Start from here" first to set your starting point.';
+    return;
+  }
+
+  hint.textContent = state.ranked.length > 0
+    ? 'Settings changed. Search again from the same starting point.'
+    : 'Searches from the starting point you already set.';
+}
+
 function selectRunType(id) {
   state.runType = id;
   savePrefs();
@@ -122,14 +198,18 @@ function showPanel(id, visible) {
   el(id).hidden = !visible;
 }
 
-function setBusy(busy, { title = 'Finding routes', detail = '' } = {}) {
+function setBusy(busy, { title = 'Finding routes', detail = '', counts = '' } = {}) {
   state.busy = busy;
   showPanel('progress', busy);
   el('start-here').disabled = busy;
+  el('generate').disabled = busy || !state.position;
 
   if (busy) {
     el('progress-title').textContent = title;
     el('progress-detail').textContent = detail;
+    el('progress-counts').textContent = counts;
+  } else {
+    el('progress-counts').textContent = '';
   }
 }
 
@@ -199,6 +279,9 @@ function renderCandidates() {
   const list = el('candidates');
   list.innerHTML = '';
 
+  // Near misses are listed after the accepted ones rather than discarded. A
+  // single result beside an empty list reads as though nothing else was
+  // found, when several loops were measured and simply landed outside 5%.
   for (const entry of state.ranked) {
     const item = document.createElement('li');
 
@@ -214,7 +297,13 @@ function renderCandidates() {
 
     const meta = document.createElement('span');
     meta.className = 'candidate-meta';
-    meta.textContent = ' · ' + entry.label;
+
+    const errPct = relativeError(entry.route, state.distanceKm * 1000) * 100;
+    const offTarget = Math.abs(errPct) > 5;
+    meta.textContent =
+      ' · ' + entry.label +
+      (offTarget ? ' · ' + (errPct > 0 ? '+' : '') + errPct.toFixed(1) + '% off' : '');
+    if (offTarget) meta.classList.add('off-target');
 
     main.append(distance, meta);
     button.append(main);
@@ -337,6 +426,7 @@ async function startFromHere() {
   try {
     state.position = await getPosition();
     state.map.showStart(state.position.lat, state.position.lon);
+    markSettingsChanged();
   } catch (cause) {
     setBusy(false);
     showError('Could not get your location', cause.message, [
@@ -362,7 +452,11 @@ async function generate() {
   }
 
   const targetM = state.distanceKm * 1000;
-  const provider = new OrsProvider({ apiKey: key });
+  const provider = new OrsProvider({ apiKey: key, style: state.style });
+
+  // A run can take a while against the real service. Let it be stopped rather
+  // than leaving the only options as "wait" or "reload the page".
+  state.abort = new AbortController();
 
   setBusy(true, { title: 'Finding routes', detail: 'Asking for candidate loops…' });
   clearError();
@@ -374,30 +468,55 @@ async function generate() {
       lon: state.position.lon,
       targetM,
       runType: state.runType,
+      style: state.style,
       // A fresh base seed each run, so tapping again offers different loops.
       baseSeed: Math.floor(Math.random() * 2 ** 31),
-      onProgress: ({ phase, attempts }) => {
+      signal: state.abort.signal,
+      onProgress: ({ phase, round, maxRounds, measured, accepted }) => {
         const detail = {
           requesting: 'Asking for candidate loops…',
           measuring: 'Measuring what came back…',
-          correcting: 'Correcting the distance and asking again…',
+          correcting: 'Distance was off. Correcting and asking again…',
           done: 'Ranking candidates…',
         };
-        setBusy(true, { title: 'Finding routes', detail: detail[phase] || '' });
-        debug('progress', { phase, attempts });
+        // Real numbers, so a long run reads as progress rather than a hang.
+        const counts =
+          'Round ' + Math.min(round, maxRounds) + ' of ' + maxRounds +
+          ' · ' + measured + ' loop' + (measured === 1 ? '' : 's') + ' measured' +
+          ' · ' + accepted + ' within 5%';
+
+        setBusy(true, { title: 'Finding routes', detail: detail[phase] || '', counts });
+        debug('progress', { phase, round, measured });
       },
     });
 
     setBusy(false);
+    state.abort = null;
 
     if (result.status === 'failed') {
       handleFailure(result);
       return;
     }
 
-    state.ranked = result.ranked;
+    // Accepted first, then the loops that missed tolerance, so the list is
+    // never a single row with nothing to compare against.
+    state.ranked = [...result.ranked, ...(result.nearMisses ?? [])];
     selectCandidate(result.ranked[0], { redraw: true });
     renderCandidates();
+    markSettingsChanged();
+
+    if (provider.weightingsUnsupported && state.style !== 'direct') {
+      // Be honest when a preference could not be applied rather than letting
+      // the runner believe the route avoided main roads when it did not.
+      debug('route style weightings unsupported by this deployment');
+      showError(
+        'Route style could not be applied',
+        'This OpenRouteService deployment does not support the quiet and green ' +
+          'preferences, so the routes were planned without them. They may use ' +
+          'main roads - check the map before setting off.',
+        [{ label: 'Understood', primary: true, onClick: clearError }],
+      );
+    }
 
     if (result.warnings.length > 0) {
       debug('completed with warnings', { count: result.warnings.length });
@@ -411,6 +530,14 @@ async function generate() {
     renderRecent();
   } catch (cause) {
     setBusy(false);
+    state.abort = null;
+
+    // A deliberate stop is not an error.
+    if (cause && cause.name === 'AbortError') {
+      markSettingsChanged();
+      return;
+    }
+
     logError(cause);
     showError('Route generation failed', cause.message || 'Something went wrong. Try again.', [
       { label: 'Try again', primary: true, onClick: generate },
@@ -512,6 +639,11 @@ function renderKeyStatus() {
 
 function wireEvents() {
   el('start-here').addEventListener('click', startFromHere);
+  el('generate').addEventListener('click', generate);
+
+  el('cancel').addEventListener('click', () => {
+    if (state.abort) state.abort.abort();
+  });
 
   el('distance').addEventListener('change', (event) => {
     const value = Number(event.target.value);
@@ -520,6 +652,7 @@ function wireEvents() {
     event.target.value = String(state.distanceKm);
     savePrefs();
     syncDistanceChips();
+    markSettingsChanged();
   });
 
   for (const chip of document.querySelectorAll('.chip[data-km]')) {
@@ -528,6 +661,7 @@ function wireEvents() {
       el('distance').value = String(state.distanceKm);
       savePrefs();
       syncDistanceChips();
+      markSettingsChanged();
     });
   }
 
@@ -606,7 +740,9 @@ function init() {
   el('distance').value = String(state.distanceKm);
   syncDistanceChips();
   renderRunTypes();
+  renderRouteStyles();
   wireEvents();
+  markSettingsChanged();
   renderKeyStatus();
   renderRecent();
 

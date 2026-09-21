@@ -115,18 +115,38 @@
     </div>
 
     <fieldset class="run-types">
+      <legend class="field-label">Route style</legend>
+      <div class="run-type-grid style-grid" id="route-styles"></div>
+      <p class="note">
+        Quiet prefers residential streets and footpaths. No routing service can
+        guarantee a pavement, because pavement data in OpenStreetMap is
+        incomplete - check the map before you set off.
+      </p>
+    </fieldset>
+
+    <fieldset class="run-types">
       <legend class="field-label">Run type</legend>
       <div class="run-type-grid" id="run-types"></div>
     </fieldset>
+
+    <button type="button" id="generate" class="button primary generate" disabled>
+      Find routes with these settings
+    </button>
+    <p class="note" id="generate-hint">
+      Use your location once, then change the distance or style and search again
+      without another location fix.
+    </p>
   </section>
 
   <!-- Progress ------------------------------------------------------ -->
   <section id="progress" class="panel progress" hidden aria-live="polite">
     <div class="spinner" aria-hidden="true"></div>
-    <div>
+    <div class="progress-body">
       <strong id="progress-title">Finding routes</strong>
       <p class="note" id="progress-detail">Asking for candidate loops…</p>
+      <p class="note progress-counts" id="progress-counts"></p>
     </div>
+    <button type="button" id="cancel" class="button subtle">Stop</button>
   </section>
 
   <!-- Errors -------------------------------------------------------- -->

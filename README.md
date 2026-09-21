@@ -126,6 +126,10 @@ fullscreen with its own icon.
 Tap **Start from here**. That is the whole flow: it takes a location fix and
 generates using your last distance and run type.
 
+To search again after changing the distance or style, use **Find routes with
+these settings**. It reuses the starting point you already set, so it does not
+ask for your location a second time.
+
 | Run type | Optimises for |
 |---|---|
 | **Easy** | Least total ascent |
@@ -135,6 +139,30 @@ generates using your last distance and run type.
 
 Switching run type re-ranks the routes already downloaded. It costs no
 additional requests, so it is free to try all four.
+
+### Route style, and what it cannot promise
+
+| Style | Sends |
+|---|---|
+| **Quiet** (default) | Walking profile, weighted hard towards quiet streets and away from main roads |
+| **Paths** | Hiking profile, weighted towards parks and green space |
+| **Direct** | Walking profile, no preference |
+
+Unlike run type, style changes the routing itself, so it needs a new search.
+
+**No routing service can guarantee a pavement.** OpenRouteService has no
+sidewalk filter, because `sidewalk` tagging in OpenStreetMap is too incomplete
+to route on — a road can be routable on foot simply because nobody has recorded
+whether there is a path beside it. `avoid_features` does not help either: for
+foot profiles it covers ferries, fords and steps, not roads.
+
+Quiet weighting is the strongest available lever and it is the default, but
+**look at the map before you set off.**
+
+The `quiet` and `green` weightings depend on extended graph storages that a
+given OpenRouteService deployment may not have built. If they are rejected, the
+app retries once without them and tells you the style could not be applied,
+rather than silently returning a route that may use main roads.
 
 GPX downloads are written as tracks with elevation on every point and **no
 timestamps** — a plan, not a recorded run.
