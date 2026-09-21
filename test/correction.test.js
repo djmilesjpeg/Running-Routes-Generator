@@ -403,10 +403,12 @@ test('planCorrection: accepted candidates come back closest-first', () => {
   assert.deepEqual(planCorrection({ targetM: target, attempts }).accepted.map((r) => r.seed), [2, 1]);
 });
 
-test('planCorrection: one good candidate is not enough to stop early', () => {
+test('planCorrection: one merely acceptable candidate is not enough to stop', () => {
+  // 10400 is inside the 5% tolerance but outside the 2% excellent band, so
+  // the run should keep looking for a second qualifying loop.
   const target = 10000;
   const attempts = [
-    routeFor({ seed: 1, requested: target, actual: 10100 }),
+    routeFor({ seed: 1, requested: target, actual: 10400 }),
     routeFor({ seed: 2, requested: target, actual: 15000 }),
   ];
 
@@ -414,6 +416,55 @@ test('planCorrection: one good candidate is not enough to stop early', () => {
 
   assert.equal(plan.status, 'retry', 'minAccepted is 2, so keep looking');
   assert.equal(plan.accepted.length, 1, 'but the good one is retained meanwhile');
+});
+
+test('planCorrection: one excellent candidate ends the run immediately', () => {
+  // Holding out for a second acceptable loop would spend twelve more requests
+  // to improve on something already within 1% of target.
+  const target = 10000;
+  const attempts = [
+    routeFor({ seed: 1, requested: target, actual: 10050 }),
+    routeFor({ seed: 2, requested: target, actual: 15000 }),
+  ];
+
+  const plan = planCorrection({ targetM: target, attempts });
+
+  assert.equal(plan.status, 'satisfied', 'a 0.5% loop is good enough to stop on');
+  assert.equal(plan.nextRequests.length, 0, 'no further quota should be spent');
+  assert.equal(plan.accepted.length, 1);
+});
+
+test('planCorrection: the excellent threshold is configurable', () => {
+  const target = 10000;
+  const attempts = [
+    routeFor({ seed: 1, requested: target, actual: 10300 }),
+    routeFor({ seed: 2, requested: target, actual: 15000 }),
+  ];
+
+  assert.equal(planCorrection({ targetM: target, attempts }).status, 'retry', '3% is not excellent by default');
+  assert.equal(
+    planCorrection({ targetM: target, attempts, options: { excellentTolerance: 0.04 } }).status,
+    'satisfied',
+    'a looser excellent band should stop on the same candidate',
+  );
+});
+
+test('planCorrection: alternatives are offered even on a successful run', () => {
+  // A single result with an empty alternatives list reads as though the app
+  // found nothing else. Every seed's latest attempt comes back ranked.
+  const target = 10000;
+  const attempts = [
+    routeFor({ seed: 1, requested: target, actual: 10050 }),
+    routeFor({ seed: 2, requested: target, actual: 15000 }),
+    routeFor({ seed: 3, requested: target, actual: 8000 }),
+  ];
+
+  const plan = planCorrection({ targetM: target, attempts });
+
+  assert.equal(plan.status, 'satisfied');
+  assert.equal(plan.accepted.length, 1, 'only one is within tolerance');
+  assert.equal(plan.allCandidates.length, 3, 'but all three should be offered');
+  assert.equal(plan.allCandidates[0].seed, 1, 'closest first');
 });
 
 test('planCorrection: a retry corrects the failing seed downward', () => {

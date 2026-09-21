@@ -63,6 +63,15 @@ export const DEFAULT_CORRECTION_OPTIONS = Object.freeze({
   maxTotalAttempts: null,
   /** Stop early once this many candidates qualify. */
   minAccepted: 2,
+  /**
+   * A single candidate this close ends the run immediately.
+   *
+   * Without it, a run that nails the distance on the first round still spends
+   * its whole budget hunting for a second qualifying loop - twelve more
+   * requests and a long wait to improve on a route that was already within a
+   * couple of percent. Holding out for variety is not worth that.
+   */
+  excellentTolerance: 0.02,
   /** Retire a seed that has failed this many times and try a fresh one. */
   maxAttemptsPerSeed: 3,
   /** Absolute floor on a request, metres. */
@@ -312,6 +321,11 @@ export function planCorrection({ targetM, attempts = [], baseSeed = 1, options =
     targetM,
   );
 
+  // Every seed's latest attempt, ranked. The UI shows these as alternatives
+  // even on a successful run, so there is always more than one route to look
+  // at rather than a single result and an empty list.
+  const allRanked = rankByAccuracy(latestPerSeed, targetM);
+
   const diagnostics = {
     attemptCount: attempts.length,
     seedCount: bySeed.size,
@@ -322,9 +336,25 @@ export function planCorrection({ targetM, attempts = [], baseSeed = 1, options =
     ratios: latestPerSeed.map((r) => ({ seed: r.seed, ratio: correctionRatio(r) })),
   };
 
+  // One candidate that is already excellent is worth more than a full budget
+  // spent looking for a second merely acceptable one.
+  const haveExcellent = accepted.some((r) => isWithinTolerance(r, targetM, opts.excellentTolerance));
+
   // Enough good candidates, or out of budget but holding at least one.
-  if (accepted.length >= opts.minAccepted || (accepted.length > 0 && outOfBudget)) {
-    return { status: 'satisfied', accepted, nextRequests: [], roundsDone, error: null, diagnostics };
+  if (
+    accepted.length >= opts.minAccepted ||
+    haveExcellent ||
+    (accepted.length > 0 && outOfBudget)
+  ) {
+    return {
+      status: 'satisfied',
+      accepted,
+      allCandidates: allRanked,
+      nextRequests: [],
+      roundsDone,
+      error: null,
+      diagnostics,
+    };
   }
 
   if (outOfBudget) {
@@ -335,6 +365,7 @@ export function planCorrection({ targetM, attempts = [], baseSeed = 1, options =
     return {
       status: 'exhausted',
       accepted: [],
+      allCandidates: allRanked,
       nextRequests: [],
       roundsDone,
       error: {
@@ -393,6 +424,7 @@ export function planCorrection({ targetM, attempts = [], baseSeed = 1, options =
   return {
     status: 'retry',
     accepted,
+    allCandidates: allRanked,
     nextRequests: nextRequests.slice(0, width),
     roundsDone,
     error: null,
