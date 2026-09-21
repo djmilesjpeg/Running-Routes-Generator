@@ -1,0 +1,12 @@
+# Paths exempt from the COORDINATE-SHAPE check only.
+#
+# Credential scanning still applies to every path listed here. Nothing is ever
+# exempt from that.
+#
+# Only add a path if the coordinates in it are INVENTED. Everything in
+# test/fixtures/ uses fabricated points around Wellington, New Zealand and a
+# handful of deliberate edge cases (high latitude, equator, antimeridian).
+# None of them correspond to anywhere the author has been.
+
+test/fixtures/*.json
+test/*.test.js

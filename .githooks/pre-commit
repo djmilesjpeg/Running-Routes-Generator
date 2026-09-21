@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------------------------
+# Blocks commits that would leak location data or credentials.
+#
+# GitHub Pages serves every file in the repo whether or not anything links to
+# it. An unlinked file is a public file. This hook is the last line of defence.
+#
+#   Install:  npm run install-hooks      (sets core.hooksPath=.githooks)
+#   Scan all: npm run check              (whole working tree, not just staged)
+#
+# THREE INDEPENDENT CHECKS
+#   1. Forbidden paths      - *.gpx, config.json, .env*        (no exemptions)
+#   2. Credential formats   - API keys, tokens, private keys   (no exemptions)
+#   3. Coordinate shapes    - lat/lon pairs and geo URLs       (.coordcheckignore)
+#
+# Only check 3 honours .coordcheckignore, and only for files that are supposed
+# to contain invented fixture coordinates. Fixtures are never exempt from the
+# credential scan.
+# ---------------------------------------------------------------------------
+set -uo pipefail
+
+MODE="staged"
+[ "${1:-}" = "--all" ] && MODE="all"
+
+RED=''; YEL=''; GRN=''; DIM=''; OFF=''
+if [ -t 1 ] || [ "$MODE" = "all" ]; then
+  RED=$'\033[31m'; YEL=$'\033[33m'; GRN=$'\033[32m'; DIM=$'\033[2m'; OFF=$'\033[0m'
+fi
+
+FAILURES=0
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT" || exit 1
+
+# --- patterns ---------------------------------------------------------------
+
+# Paths that must never be committed, regardless of content.
+FORBIDDEN_PATHS='(^|/)config\.json$|(^|/)config\.local\.json$|(^|/)\.env($|\.)|\.gpx$|\.tcx$|\.fit$|(^|/)route-cache\.json$|\.routes\.json$'
+
+# Credential shapes. Checked in every file, including fixtures.
+read -r -d '' KEY_PATTERNS <<'PATTERNS'
+5b3ce3597851110001cf[0-9a-fA-F]{20,}
+\b[0-9a-fA-F]{48,}\b
+AIza[0-9A-Za-z_-]{35}
+\bsk-[A-Za-z0-9]{20,}
+\b(gh[pousr]_[A-Za-z0-9]{30,})
+\bAKIA[0-9A-Z]{16}\b
+\bpk\.eyJ[A-Za-z0-9._-]{20,}
+\bxox[baprs]-[A-Za-z0-9-]{10,}
+-----BEGIN [A-Z ]*PRIVATE KEY-----
+\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.
+(api[_-]?key|apikey|api_token|access[_-]?token|auth[_-]?token|client[_-]?secret|secret|password|passwd)['"]?[[:space:]]*[:=][[:space:]]*['"][^'"]{16,}['"]
+PATTERNS
+
+# Obvious non-secrets. A line containing any of these is not a credential hit.
+PLACEHOLDER='REPLACE_ME|YOUR_|YOURKEY|EXAMPLE|DUMMY|PLACEHOLDER|CHANGEME|CHANGE_ME|TODO|FIXME|<[^>]*>|\bxxx+|\.\.\.|process\.env|localStorage|getItem|setItem|\*{4,}|sha512-|sha256-|integrity'
+
+# Coordinate shapes. Honours .coordcheckignore.
+read -r -d '' COORD_PATTERNS <<'PATTERNS'
+-?[0-9]{1,3}\.[0-9]{4,}[[:space:]]*,[[:space:]]*-?[0-9]{1,3}\.[0-9]{4,}
+\b(lat|latitude|lon|lng|longitude)['"]?[[:space:]]*[:=][[:space:]]*-?[0-9]{1,3}\.[0-9]{3,}
+[@=](-?[0-9]{1,3}\.[0-9]{4,}),(-?[0-9]{1,3}\.[0-9]{4,})
+\bgeo:-?[0-9]{1,3}\.[0-9]+,-?[0-9]{1,3}\.[0-9]+
+PATTERNS
+
+BINARY_EXT='\.(png|jpe?g|gif|ico|webp|avif|woff2?|ttf|eot|zip|gz|tgz|pdf|mp[34]|mov|webm|wasm|bin)$'
+
+# --- file list --------------------------------------------------------------
+
+if [ "$MODE" = "staged" ]; then
+  mapfile -t FILES < <(git diff --cached --name-only --diff-filter=ACM)
+else
+  mapfile -t FILES < <(git ls-files --cached --others --exclude-standard)
+fi
+
+if [ "${#FILES[@]}" -eq 0 ]; then
+  echo "${DIM}privacy-check: nothing to scan${OFF}"
+  exit 0
+fi
+
+# Read a file's committed content (index in staged mode, disk in --all mode).
+read_content() {
+  if [ "$MODE" = "staged" ]; then git show ":$1" 2>/dev/null; else cat "$1" 2>/dev/null; fi
+}
+
+# Is $1 exempt from the COORDINATE check only?
+coord_exempt() {
+  [ -f .coordcheckignore ] || return 1
+  local pattern
+  while IFS= read -r pattern; do
+    case "$pattern" in ''|'#'*) continue ;; esac
+    # shellcheck disable=SC2254
+    case "$1" in $pattern) return 0 ;; esac
+  done < .coordcheckignore
+  return 1
+}
+
+report() { # report <file> <label> <detail>
+  FAILURES=$((FAILURES + 1))
+  printf '%s  BLOCKED%s %s\n' "$RED" "$OFF" "$1"
+  printf '           %s\n' "$2"
+  [ -n "${3:-}" ] && printf '           %s%s%s\n' "$DIM" "$3" "$OFF"
+}
+
+# --- scan -------------------------------------------------------------------
+
+for f in "${FILES[@]}"; do
+  [ -z "$f" ] && continue
+
+  # 1. forbidden paths
+  if printf '%s' "$f" | grep -Eq "$FORBIDDEN_PATHS"; then
+    report "$f" "Forbidden path. This file type must never be committed." \
+      "It is listed in .gitignore; staging it required a deliberate 'git add -f'."
+    continue
+  fi
+
+  printf '%s' "$f" | grep -Eiq "$BINARY_EXT" && continue
+  content="$(read_content "$f")"
+  [ -z "$content" ] && continue
+  printf '%s' "$content" | grep -Iq . || continue   # skip binary content
+
+  # 2. credential formats - no file is exempt
+  while IFS= read -r pat; do
+    [ -z "$pat" ] && continue
+    hit="$(printf '%s' "$content" | grep -nE -e "$pat" | grep -Eiv "$PLACEHOLDER" | head -1)"
+    if [ -n "$hit" ]; then
+      line="${hit%%:*}"
+      report "$f" "Possible credential on line $line." \
+        "Keys belong in browser localStorage only. Never in source, config or a URL."
+      break
+    fi
+  done <<< "$KEY_PATTERNS"
+
+  # 3. coordinate shapes - fixtures may opt out via .coordcheckignore
+  coord_exempt "$f" && continue
+  while IFS= read -r pat; do
+    [ -z "$pat" ] && continue
+    hit="$(printf '%s' "$content" | grep -nE -e "$pat" | head -1)"
+    if [ -n "$hit" ]; then
+      line="${hit%%:*}"
+      report "$f" "Coordinate-shaped value on line $line." \
+        "If these are invented fixture coordinates, add the path to .coordcheckignore."
+      break
+    fi
+  done <<< "$COORD_PATTERNS"
+done
+
+# --- verdict ----------------------------------------------------------------
+
+echo
+if [ "$FAILURES" -gt 0 ]; then
+  printf '%sprivacy-check failed: %d problem(s) in %d file(s) scanned.%s\n' \
+    "$RED" "$FAILURES" "${#FILES[@]}" "$OFF"
+  printf '%sNothing was committed. Fix the above, or if a hit is genuinely a false\n' "$YEL"
+  printf 'positive, add the path to .coordcheckignore (coordinates only - never\n'
+  printf 'for credentials). Bypassing with --no-verify defeats the purpose.%s\n' "$OFF"
+  exit 1
+fi
+
+printf '%sprivacy-check passed%s %s(%d file(s))%s\n' "$GRN" "$OFF" "$DIM" "${#FILES[@]}" "$OFF"
+exit 0
