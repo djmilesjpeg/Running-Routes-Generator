@@ -97,14 +97,32 @@ route generation costs up to 16 requests, so roughly 125 generations a day.
 
 ### Run it locally
 
-Any static file server pointed at `docs/`:
-
 ```bash
-python -m http.server 8099 --directory docs
+npm start
 ```
 
-Then open `http://localhost:8099`. Geolocation and service workers both need a
-secure context; `localhost` counts as one, so this works without HTTPS.
+Then open `http://127.0.0.1:8099` **in your browser** — that is a web address,
+not a command. Ctrl+C in the terminal stops the server.
+
+Geolocation and service workers both need a secure context; `localhost` and
+`127.0.0.1` count as one, so this works without HTTPS.
+
+**Use this rather than `python -m http.server`.** python's server sends no
+`Cache-Control`, so browsers fall back to heuristic caching — and each ES module
+is cached independently, so a plain reload does not pick up an edited file. That
+produces a genuinely confusing failure: the file on disk is correct, the server
+serves it correctly, and the page keeps running the old version. This server
+sends `no-store`, so a reload always runs what is on disk.
+
+If the page ever behaves like an older version anyway, check which build is
+running from the browser console (F12):
+
+```js
+__loopgenBuild
+```
+
+Production caching is a separate matter and is handled deliberately by the
+service worker, versioned via `CACHE_VERSION` in `docs/sw.js`.
 
 ### Deploy to GitHub Pages
 

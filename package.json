@@ -6,6 +6,8 @@
   "private": true,
   "license": "MIT",
   "scripts": {
+    "start": "node scripts/dev-server.mjs",
+    "dev": "node scripts/dev-server.mjs",
     "test": "node --test \"test/*.test.js\"",
     "test:watch": "node --test --watch \"test/*.test.js\"",
     "install-hooks": "git config core.hooksPath .githooks && echo Hooks installed: .githooks",

@@ -66,6 +66,8 @@ export async function generateRoutes({
   let requests = initialPlan({ targetM, baseSeed, options: opts });
   let plan = null;
   let round = 0;
+  let issued = 0;
+  let barrenRounds = 0;
 
   const budget = opts.maxTotalAttempts ?? opts.candidateCount * opts.maxRounds;
   const maxRounds = opts.maxRounds;
@@ -95,7 +97,22 @@ export async function generateRoutes({
       throw Object.assign(new Error('Route generation was stopped.'), { name: 'AbortError' });
     }
 
+    // Bound on requests ISSUED, not routes received.
+    //
+    // Counting only successes meant a round in which every request failed
+    // added nothing to `attempts`, so the budget never depleted, the same plan
+    // came back, and the loop ran forever. Worse, a provider that rejects
+    // without touching the network resolves entirely in microtasks, so that
+    // loop never yields: timers stop firing, the page stops repainting and
+    // even the stop button cannot be clicked.
+    if (issued >= budget) break;
+
+    // Yield to the task queue once per round. Guarantees the UI can repaint
+    // and a stop can be processed even when every request resolves instantly.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
     round += 1;
+    issued += requests.length;
     report('requesting', { requested: requests.length });
 
     const settled = await Promise.allSettled(
@@ -159,6 +176,26 @@ export async function generateRoutes({
 
     report('measuring', { received });
 
+    // A round that produced nothing advanced nothing. Two in a row means the
+    // provider is failing consistently and further rounds would only repeat
+    // the same requests.
+    if (received === 0) {
+      barrenRounds += 1;
+      if (barrenRounds >= 2) {
+        const last = failures[failures.length - 1]?.error;
+        return failure(
+          last ||
+            new RouteProviderError(
+              PROVIDER_ERRORS.NO_ROUTE,
+              'Routing kept failing, so the search was stopped.',
+            ),
+          { attempts, warnings, targetM, runType },
+        );
+      }
+    } else {
+      barrenRounds = 0;
+    }
+
     plan = planCorrection({ targetM, attempts, baseSeed, options: opts });
 
     if (plan.status !== 'retry') break;
@@ -167,8 +204,17 @@ export async function generateRoutes({
     requests = plan.nextRequests;
   }
 
-  if (!plan) {
-    plan = planCorrection({ targetM, attempts, baseSeed, options: opts });
+  // The loop can exit on the request budget while the last plan still says
+  // retry. Re-plan with the budget pinned to what was actually spent, so the
+  // outcome resolves to satisfied or exhausted rather than being read as a
+  // success with nothing in it.
+  if (!plan || plan.status === 'retry') {
+    plan = planCorrection({
+      targetM,
+      attempts,
+      baseSeed,
+      options: { ...opts, maxTotalAttempts: Math.max(1, attempts.length) },
+    });
   }
 
   if (plan.status === 'exhausted') {

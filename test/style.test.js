@@ -315,3 +315,101 @@ test('generateRoutes: stopping is honoured even by a provider that ignores the s
 
   assert.ok(rounds <= 4, 'should not have started another round, saw ' + rounds + ' requests');
 });
+
+// ---------------------------------------------------------------------------
+// termination
+// ---------------------------------------------------------------------------
+
+/** A provider whose first `successes` requests work and whose rest all fail. */
+function failingAfter(successes, error = null) {
+  let call = 0;
+  const made = { count: 0 };
+  return {
+    made,
+    async generateCandidates({ distanceM, seed }) {
+      call += 1;
+      made.count = call;
+      if (call > successes) {
+        throw error || new RouteProviderError(PROVIDER_ERRORS.NO_ROUTE, 'no loop for this seed');
+      }
+      return [
+        routeFromOrsGeoJson(
+          makeOrsResponse({
+            requestedLengthM: distanceM,
+            actualLengthM: distanceM * 1.9,
+            seed,
+            pointCount: 12,
+          }),
+          { requestedLengthM: distanceM, seed },
+        ),
+      ];
+    },
+  };
+}
+
+test('a round where every request fails does not loop forever', async () => {
+  // The budget used to count routes RECEIVED. A round in which every request
+  // failed added nothing, so the budget never depleted, the same plan came
+  // back and the loop ran until the tab was closed.
+  const provider = failingAfter(4);
+
+  const result = await generateRoutes({
+    provider, lat: LAT, lon: LON, targetM: 21097, runType: 'easy', baseSeed: 1,
+  });
+
+  assert.equal(result.status, 'failed');
+  assert.ok(provider.made.count <= 16, 'issued ' + provider.made.count + ' requests, budget is 16');
+});
+
+test('failed requests count against the budget', async () => {
+  // Otherwise a provider failing every request is free, and the run is endless.
+  const provider = failingAfter(0);
+
+  await generateRoutes({ provider, lat: LAT, lon: LON, targetM: 10000, runType: 'easy', baseSeed: 1 });
+
+  assert.ok(provider.made.count <= 16, 'issued ' + provider.made.count + ' requests');
+});
+
+test('two barren rounds stop the run and report why', async () => {
+  const provider = failingAfter(4);
+
+  const result = await generateRoutes({
+    provider, lat: LAT, lon: LON, targetM: 21097, runType: 'easy', baseSeed: 1,
+  });
+
+  assert.equal(result.status, 'failed');
+  assert.ok(result.error.message.length > 0, 'a failure needs an explanation');
+  assert.ok(provider.made.count <= 12, 'should give up early, issued ' + provider.made.count);
+});
+
+test('the run yields to the task queue so the UI can breathe', async () => {
+  // A provider that rejects without touching the network settles entirely in
+  // microtasks. Without an explicit yield, timers never fire, the page never
+  // repaints, and the stop button cannot even be clicked.
+  let ticks = 0;
+  const timer = setInterval(() => { ticks += 1; }, 1);
+
+  try {
+    await generateRoutes({
+      provider: failingAfter(4),
+      lat: LAT, lon: LON, targetM: 21097, runType: 'easy', baseSeed: 1,
+    });
+  } finally {
+    clearInterval(timer);
+  }
+
+  assert.ok(ticks > 0, 'the task queue was starved for the whole run');
+});
+
+test('a run that cannot make progress still terminates quickly', async () => {
+  // Guards the shape of the bug rather than one instance of it: whatever the
+  // provider does, generateRoutes must return.
+  const started = Date.now();
+
+  await generateRoutes({
+    provider: { async generateCandidates() { throw new Error('always broken'); } },
+    lat: LAT, lon: LON, targetM: 42195, runType: 'long', baseSeed: 3,
+  });
+
+  assert.ok(Date.now() - started < 5000, 'took too long to give up');
+});
