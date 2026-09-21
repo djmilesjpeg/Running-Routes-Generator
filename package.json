@@ -6,8 +6,8 @@
   "private": true,
   "license": "MIT",
   "scripts": {
-    "test": "node --test test/",
-    "test:watch": "node --test --watch test/",
+    "test": "node --test \"test/*.test.js\"",
+    "test:watch": "node --test --watch \"test/*.test.js\"",
     "install-hooks": "git config core.hooksPath .githooks && echo Hooks installed: .githooks",
     "check": "bash .githooks/pre-commit --all",
     "icons": "node scripts/make-icons.mjs"
