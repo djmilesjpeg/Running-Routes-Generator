@@ -11,16 +11,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 22 is the floor, not a preference: the test script passes a glob to
+      # `node --test`, which Node only expands from 21 onwards. Node 20 treats
+      # the pattern as a literal filename and fails before running anything.
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
-      # No dependencies to install: the suite runs on node:test.
-      - name: Run tests
-        run: npm test
-
-      # The pre-commit hook only protects local commits. Running the same
-      # check here catches anything pushed with --no-verify, or committed
-      # before the hook was installed.
+      # Runs first, deliberately. The pre-commit hook only protects local
+      # commits, so this is the check that catches anything pushed with
+      # --no-verify or committed before the hook was installed. When it ran
+      # after the tests, a failing test skipped it entirely - the safety net
+      # disappeared exactly when something was already wrong.
       - name: Privacy check
         run: bash .githooks/pre-commit --all
+
+      # No dependencies to install: the suite runs on node:test. Runs even if
+      # the privacy check failed, so one failure never hides the other.
+      - name: Run tests
+        if: success() || failure()
+        run: npm test

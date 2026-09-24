@@ -15,6 +15,6 @@
     "icons": "node scripts/make-icons.mjs"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   }
 }
